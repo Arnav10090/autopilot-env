@@ -245,7 +245,7 @@ cd adaptive-enterprise-autopilot
 
 # Docker
 docker build -t autopilot-env .
-docker run -p 7860:7860 -e AUTOPILOT_TASK=medium autopilot-env
+$env:PYTHONPATH="src"; python -m uvicorn server.app:app --host 0.0.0.0 --port 7860
 
 # Test
 curl http://localhost:7860/health
