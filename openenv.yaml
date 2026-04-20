@@ -1,0 +1,46 @@
+name: adaptive-enterprise-autopilot
+version: "1.0.0"
+description: >
+  An OpenEnv environment where an AI agent orchestrates multi-step enterprise
+  workflows using real tool APIs (Jira, Slack, Email, HR, Calendar).
+  Combines World Modeling (T3.1), Long-Horizon Planning (T2), and Self-Improvement (T4).
+  Difficulty auto-escalates via a curriculum generator after each episode.
+
+author: Arnav Deepak Tiwari & Vishal Kumar
+tags:
+  - openenv
+  - enterprise-workflows
+  - long-horizon-planning
+  - self-improvement
+  - world-modeling
+  - tool-use
+
+tasks:
+  - name: easy
+    description: 5–7 task linear workflows. Single-track, no blockers, 0–1 business rules.
+    max_steps: 12
+    reward_range: [0.0, 2.0]
+
+  - name: medium
+    description: 9–11 task branching workflows. Parallel tracks, 1 blocker, 2 business rules.
+    max_steps: 20
+    reward_range: [0.0, 2.0]
+
+  - name: hard
+    description: 13–15 task complex DAG. Multiple blockers, strict ordering rules, legal constraints.
+    max_steps: 30
+    reward_range: [0.0, 2.0]
+
+api:
+  reset:  POST /reset
+  step:   POST /step
+  state:  GET  /state
+  health: GET  /health
+
+environment_variables:
+  AUTOPILOT_TASK:
+    description: Default task difficulty (easy | medium | hard)
+    default: easy
+  PORT:
+    description: Server port
+    default: "7860"
