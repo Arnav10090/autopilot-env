@@ -2,7 +2,7 @@
 title: Adaptive Enterprise Autopilot
 emoji: 🤖
 colorFrom: indigo
-colorTo: teal
+colorTo: blue
 sdk: docker
 pinned: false
 tags:
@@ -79,8 +79,8 @@ After each episode, the environment **generates a harder variant** of the comple
 
 ## Live Demo
 
-**Space URL**: https://huggingface.co/spaces/your-username/adaptive-enterprise-autopilot
-**API Endpoint**: https://your-username-adaptive-enterprise-autopilot.hf.space
+**Space URL**: https://huggingface.co/spaces/Arnav100904/adaptive-enterprise-autopilot
+**API Endpoint**: https://arnav100904-adaptive-enterprise-autopilot.hf.space
 
 ```bash
 # Health check
