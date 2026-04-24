@@ -83,14 +83,30 @@ After each episode, the environment **generates a harder variant** of the comple
 **API Endpoint**: https://arnav100904-adaptive-enterprise-autopilot.hf.space
 
 ```bash
+#Set the API URL as a variable
+$API_URL="https://arnav100904-adaptive-enterprise-autopilot.hf.space" 
+
+```bash
+
 # Health check
-curl https://arnav100904-adaptive-enterprise-autopilot.hf.space/health
+curl "$API_URL/health"
 
-# Start an easy episode (onboard new intern)
-Invoke-WebRequest -Uri "https://arnav100904-adaptive-enterprise-autopilot.hf.space/reset?task=easy" -Method POST -Headers @{"Content-Type"="application/json"} -Body '{}'
+#During the Demo
+## Sequence 1: The Untrained Failure
 
-# Submit a tool call
-Invoke-WebRequest -Uri "https://arnav100904-adaptive-enterprise-autopilot.hf.space/step" -Method POST -Headers @{"Content-Type"="application/json"} -Body '{"tool": "hr_create_user","params": {"name": "Priya Sharma","role": "Software Engineer","department": "Engineering"},"reasoning": "T1 has no dependencies — creating HR record first to unblock T2."}'
+# 1. Start the episode
+Invoke-RestMethod -Uri "$API_URL/reset?task=easy" -Method POST -Headers @{"Content-Type"="application/json"} -Body '{}' | ConvertTo-Json -Depth 10
+
+# 2. Submit the bad action
+Invoke-RestMethod -Uri "$API_URL/step" -Method POST -Headers @{"Content-Type"="application/json"} -Body '{ "tool": "jira_create_ticket", "params": {"summary": "Setup account", "issue_type": "Task"}, "reasoning": "I need to set up the Jira account first." }' | ConvertTo-Json -Depth 10
+
+## Sequence 2: The Trained Success
+
+# 1. Reset for the trained agent
+Invoke-RestMethod -Uri "$API_URL/reset?task=easy" -Method POST -Headers @{"Content-Type"="application/json"} -Body '{}' | ConvertTo-Json -Depth 10
+
+# 2. Submit the correct, dependency-aware action
+Invoke-RestMethod -Uri "$API_URL/step" -Method POST -Headers @{"Content-Type"="application/json"} -Body '{"tool": "hr_create_user","params": {"name": "Riya Sharma", "role": "Intern", "department": "Engineering"},"reasoning": "T1 has no dependencies — HR record must be created first to unblock T2."}' | ConvertTo-Json -Depth 10
 ```
 
 ---
