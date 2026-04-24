@@ -1,22 +1,19 @@
 """
-Training Script — Adaptive Enterprise Autopilot
-================================================
-Uses GRPO (Group Relative Policy Optimisation) via TRL + Unsloth.
-Trains a small LLM to complete enterprise workflows by calling tools
-in the correct dependency order.
+Training Script — Adaptive Enterprise Autopilot (FIXED)
+=========================================================
+Key fixes over v1:
+  1. Pre-training baseline evaluation runs BEFORE GRPO → shows starting point
+  2. GRPOLoggingCallback logs GRPO step rewards every N steps → proper curve
+  3. Periodic in-training evaluation rollouts every EVAL_EVERY steps
+  4. Post-training final evaluation
+  5. Plot now labels axes correctly (step vs episode) and shows before/after line
 
-Run on Colab (free T4) or HuggingFace Spaces with A10G:
+Run on Colab (free T4 / A10G):
     pip install unsloth trl transformers accelerate peft datasets
     python train.py
 
-Environment variables:
-    BASE_MODEL        HuggingFace model ID to fine-tune (default: unsloth/Qwen2.5-7B-Instruct)
-    HF_TOKEN          Your HuggingFace token (needed to push the trained model)
-    PUSH_TO_HUB       Set to "1" to push the trained adapter to HF Hub
-    HUB_REPO          HF repo to push to (default: your-user/autopilot-agent)
-    NUM_EPISODES      Episodes per training run (default: 200)
-    TASKS             Comma-separated list of tasks (default: easy,medium,hard)
-    ENV_URL           If set, uses live HTTP environment; otherwise uses in-process env
+For quick smoke-test without unsloth (just plots):
+    python train.py plot
 """
 
 from __future__ import annotations
@@ -24,7 +21,7 @@ import json
 import os
 import sys
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -35,7 +32,7 @@ PUSH_TO_HUB  = os.getenv("PUSH_TO_HUB", "0") == "1"
 HUB_REPO     = os.getenv("HUB_REPO",    "your-user/autopilot-agent")
 NUM_EPISODES = int(os.getenv("NUM_EPISODES", "200"))
 TASKS        = os.getenv("TASKS", "easy,medium,hard").split(",")
-ENV_URL      = os.getenv("ENV_URL", "")
+EVAL_EVERY   = int(os.getenv("EVAL_EVERY", "10"))   # eval rollout every N GRPO steps
 
 MAX_SEQ_LEN  = 4096
 LORA_RANK    = 16
@@ -43,9 +40,7 @@ BATCH_SIZE   = 2
 GRAD_ACCUM   = 4
 LR           = 2e-5
 MAX_STEPS_EP = 30
-GRPO_K       = 4          # Number of sampled completions per prompt
-
-# ── System prompt (matches inference.py) ─────────────────────────────────────
+GRPO_K       = 4
 
 SYSTEM_PROMPT = textwrap.dedent("""
 You are an expert enterprise workflow orchestration agent.
@@ -75,97 +70,98 @@ VALID_TOOLS = [
     "calendar_create_event", "done",
 ]
 
-# ── Reward curve tracker ──────────────────────────────────────────────────────
+# ── Metrics tracker ───────────────────────────────────────────────────────────
 
 @dataclass
 class TrainingMetrics:
-    episode: int = 0
-    rewards: List[float] = None
-    difficulty_scores: List[float] = None
-    task_completion_rates: List[float] = None
+    """
+    Tracks three parallel series:
+      grpo_steps    : x-axis for GRPO step-level rewards
+      grpo_rewards  : mean reward per GRPO step
+      eval_steps    : x-axis for full-episode evaluation checkpoints
+      eval_rewards  : total episode reward at each checkpoint
+      eval_tasks    : which task each eval was on
+      difficulty    : workflow difficulty at each checkpoint
+    """
+    grpo_steps: List[int]     = field(default_factory=list)
+    grpo_rewards: List[float] = field(default_factory=list)
+    eval_steps: List[int]     = field(default_factory=list)
+    eval_rewards: List[float] = field(default_factory=list)
+    eval_tasks: List[str]     = field(default_factory=list)
+    difficulty: List[float]   = field(default_factory=list)
+    pre_train_rewards: Dict[str, float]  = field(default_factory=dict)
+    post_train_rewards: Dict[str, float] = field(default_factory=dict)
+    _step: int = field(default=0, repr=False)
+    _accum: List[float] = field(default_factory=list, repr=False)
 
-    def __post_init__(self):
-        self.rewards = []
-        self.difficulty_scores = []
-        self.task_completion_rates = []
+    def record_grpo_rewards(self, rewards: List[float]):
+        self._accum.extend(rewards)
 
-    def log(self, reward: float, difficulty: float, completion: float):
-        self.rewards.append(reward)
-        self.difficulty_scores.append(difficulty)
-        self.task_completion_rates.append(completion)
-        self.episode += 1
-        if self.episode % 20 == 0:
-            window = self.rewards[-20:]
-            print(
-                f"[ep {self.episode:4d}] "
-                f"avg_reward={sum(window)/len(window):.3f}  "
-                f"avg_completion={sum(self.task_completion_rates[-20:])/20:.1%}  "
-                f"avg_difficulty={sum(self.difficulty_scores[-20:])/20:.3f}",
-                flush=True,
-            )
+    def flush_grpo_step(self):
+        if not self._accum:
+            return
+        mean_r = sum(self._accum) / len(self._accum)
+        self._step += 1
+        self.grpo_steps.append(self._step)
+        self.grpo_rewards.append(round(mean_r, 4))
+        self._accum.clear()
+        if self._step % 10 == 0:
+            window = self.grpo_rewards[-10:]
+            print(f"[step {self._step:4d}] mean_grpo_reward={sum(window)/len(window):.3f}", flush=True)
+
+    def record_eval(self, step: int, task: str, reward: float, diff: float):
+        self.eval_steps.append(step)
+        self.eval_rewards.append(round(reward, 4))
+        self.eval_tasks.append(task)
+        self.difficulty.append(round(diff, 4))
+        print(f"[eval @ step {step}] task={task} reward={reward:.3f} difficulty={diff:.3f}", flush=True)
 
     def save(self, path: str = "training_metrics.json"):
         with open(path, "w") as f:
             json.dump({
-                "rewards": self.rewards,
-                "difficulty_scores": self.difficulty_scores,
-                "task_completion_rates": self.task_completion_rates,
-            }, f)
-        print(f"[metrics] Saved to {path}", flush=True)
+                "grpo_steps": self.grpo_steps,
+                "grpo_rewards": self.grpo_rewards,
+                "eval_steps": self.eval_steps,
+                "eval_rewards": self.eval_rewards,
+                "eval_tasks": self.eval_tasks,
+                "difficulty": self.difficulty,
+                "pre_train_rewards": self.pre_train_rewards,
+                "post_train_rewards": self.post_train_rewards,
+            }, f, indent=2)
+        print(f"[metrics] Saved {len(self.grpo_steps)} GRPO steps + {len(self.eval_steps)} evals → {path}")
 
 
 metrics = TrainingMetrics()
 
-# ── In-process environment rollout ───────────────────────────────────────────
+# ── Environment rollout ───────────────────────────────────────────────────────
 
-def run_episode_inprocess(model_fn, task: str) -> Dict[str, Any]:
-    """
-    Run one episode using the in-process environment.
-    model_fn(prompt: str) -> str  (generates JSON action)
-    """
+def run_episode(model_fn, task: str) -> Dict[str, Any]:
     sys.path.insert(0, "src")
     from envs.autopilot_env.environment import AutopilotEnvironment
     from envs.autopilot_env.models import AutopilotAction
 
     env = AutopilotEnvironment(task=task)
     obs = env.reset()
-
-    total_reward = 0.0
+    total = 0.0
     steps = 0
-
     while not obs.done and steps < MAX_STEPS_EP:
         prompt = _build_prompt(obs)
-        raw_response = model_fn(prompt)
-
+        raw = model_fn(prompt)
         try:
-            decision = json.loads(raw_response.strip())
+            d = json.loads(raw.strip())
         except Exception:
-            decision = {"tool": "done", "params": {}, "reasoning": "Parse error fallback"}
-
-        tool = decision.get("tool", "done")
+            d = {"tool": "done", "params": {}, "reasoning": ""}
+        tool = d.get("tool", "done")
         if tool not in VALID_TOOLS:
             tool = "done"
-
-        action = AutopilotAction(
-            tool=tool,
-            params=decision.get("params", {}),
-            reasoning=decision.get("reasoning", ""),
-        )
-        obs, reward, done, info = env.step(action)
-        total_reward += reward
+        obs, r, done, _ = env.step(AutopilotAction(
+            tool=tool, params=d.get("params", {}), reasoning=d.get("reasoning", "")))
+        total += r
         steps += 1
-
-    completion_rate = env.state.tasks_completed / max(env.state.tasks_total, 1)
-    difficulty = obs.difficulty_level / 10.0
-
-    metrics.log(total_reward, difficulty, completion_rate)
-
     return {
-        "total_reward": total_reward,
-        "completion_rate": completion_rate,
-        "steps": steps,
-        "difficulty": difficulty,
-        "generated_next": env.state.generated_next_workflow is not None,
+        "total_reward": total,
+        "completion_rate": env.state.tasks_completed / max(env.state.tasks_total, 1),
+        "difficulty": obs.difficulty_level / 10.0,
     }
 
 
@@ -178,44 +174,27 @@ def _build_prompt(obs) -> str:
     results_str = ""
     if obs.tool_results:
         results_str = "\nLAST RESULTS:\n" + "\n".join(
-            f"  {r.get('tool')}: success={r.get('result', {}).get('success', '?')} "
-            f"data={json.dumps(r.get('result', {}).get('result', {}))}"
+            f"  {r.get('tool')}: success={r.get('result',{}).get('success','?')} "
+            f"data={json.dumps(r.get('result',{}).get('result',{}))}"
             for r in obs.tool_results[-3:]
         )
-
     return (
-        f"WORKFLOW: {obs.workflow_name}\n"
-        f"DESC: {obs.workflow_description[:200]}\n\n"
-        f"ALL TASKS:\n{tasks_str}\n\n"
-        f"COMPLETED: {obs.completed_task_ids}\n"
-        f"AVAILABLE NOW: {obs.available_task_ids}\n"
-        f"PENDING (blocked): {obs.pending_task_ids}\n"
-        f"{results_str}\n\n"
-        f"FEEDBACK: {obs.step_feedback}"
+        f"WORKFLOW: {obs.workflow_name}\nDESC: {obs.workflow_description[:200]}\n\n"
+        f"ALL TASKS:\n{tasks_str}\n\nCOMPLETED: {obs.completed_task_ids}\n"
+        f"AVAILABLE NOW: {obs.available_task_ids}\nPENDING: {obs.pending_task_ids}\n"
+        f"{results_str}\nFEEDBACK: {obs.step_feedback}"
     )
 
 
-# ── GRPO reward function ──────────────────────────────────────────────────────
+# ── GRPO reward fn ────────────────────────────────────────────────────────────
 
 def grpo_reward_fn(completions: List[str], prompts: List[str], **kwargs) -> List[float]:
-    """
-    GRPO reward function — called by TRL's GRPOTrainer.
-    Takes K completions for the same prompt, returns a reward for each.
-
-    Reward signal:
-      +1.0  valid JSON with all required fields
-      +0.5  correct tool name
-      +0.5  correct tool for the most-available task
-      +0.3  reasoning is non-empty
-      −0.5  invalid JSON
-      −0.3  unknown tool name
-    """
     rewards = []
     for completion, prompt in zip(completions, prompts):
         r = 0.0
         try:
             parsed = json.loads(completion.strip())
-            r += 1.0  # valid JSON
+            r += 1.0
             tool = parsed.get("tool", "")
             if tool in VALID_TOOLS:
                 r += 0.5
@@ -223,332 +202,261 @@ def grpo_reward_fn(completions: List[str], prompts: List[str], **kwargs) -> List
                 r -= 0.3
             if parsed.get("reasoning", "").strip():
                 r += 0.3
-            # Bonus: does the chosen tool match an available task?
-            if "AVAILABLE NOW: ['" in prompt:
-                avail_section = prompt.split("AVAILABLE NOW: ")[1].split("\n")[0]
-                if tool != "done" and tool in prompt:
-                    r += 0.5
-            # Penalise calling "done" if available tasks still exist
+            if "AVAILABLE NOW: ['" in prompt and tool != "done" and tool in prompt:
+                r += 0.5
             if tool == "done" and "AVAILABLE NOW: []" not in prompt:
                 r -= 0.4
         except Exception:
-            r -= 0.5  # invalid JSON
+            r -= 0.5
         rewards.append(round(r, 3))
+    metrics.record_grpo_rewards(rewards)
     return rewards
 
 
-# ── Dataset builder (for supervised warm-up) ─────────────────────────────────
+# ── GRPO callback ─────────────────────────────────────────────────────────────
 
-def build_warmup_dataset() -> List[Dict]:
-    """
-    Build a small supervised dataset of perfect trajectory examples.
-    Used for a short SFT warm-up before GRPO to stabilise JSON output.
-    """
-    examples = [
+def make_callback(get_model_fn):
+    try:
+        from transformers import TrainerCallback
+
+        class MetricsCallback(TrainerCallback):
+            def on_step_end(self, args, state, control, **kwargs):
+                metrics.flush_grpo_step()
+                if state.global_step > 0 and state.global_step % EVAL_EVERY == 0:
+                    fn = get_model_fn()
+                    if fn:
+                        try:
+                            r = run_episode(fn, "easy")
+                            metrics.record_eval(state.global_step, "easy",
+                                                r["total_reward"], r["difficulty"])
+                        except Exception as e:
+                            print(f"[callback eval error] {e}", flush=True)
+
+        return MetricsCallback()
+    except ImportError:
+        return None
+
+
+# ── Warmup dataset ────────────────────────────────────────────────────────────
+
+def build_warmup_dataset():
+    return [
         {
             "system": SYSTEM_PROMPT,
-            "user": (
-                "WORKFLOW: Onboard new intern\n"
-                "ALL TASKS:\n"
-                "  [T1] Create HR profile: tool=hr_create_user, deps=[], rule=none\n"
-                "  [T2] Create Jira ticket for setup: tool=jira_create_ticket, deps=[T1], rule=HR profile must exist before creating tool accounts.\n"
-                "COMPLETED: []\nAVAILABLE NOW: ['T1']\nPENDING: ['T2']"
-            ),
-            "assistant": json.dumps({
-                "tool": "hr_create_user",
-                "params": {"name": "New Intern", "role": "Software Engineering Intern", "department": "Engineering"},
-                "reasoning": "T1 has no dependencies and must be completed first to unblock T2."
-            }),
+            "user": "WORKFLOW: Onboard new intern\nALL TASKS:\n  [T1] Create HR profile: tool=hr_create_user, deps=[]\nCOMPLETED: []\nAVAILABLE NOW: ['T1']\nPENDING: ['T2']",
+            "assistant": json.dumps({"tool": "hr_create_user", "params": {"name": "Intern", "role": "Intern", "department": "Engineering"}, "reasoning": "T1 has no deps — first move."}),
         },
         {
             "system": SYSTEM_PROMPT,
-            "user": (
-                "WORKFLOW: Onboard new intern\n"
-                "ALL TASKS:\n"
-                "  [T1] Create HR profile: tool=hr_create_user, deps=[], rule=none\n"
-                "  [T2] Create Jira ticket for setup: tool=jira_create_ticket, deps=[T1], rule=HR profile must exist.\n"
-                "COMPLETED: ['T1']\nAVAILABLE NOW: ['T2', 'T3', 'T4']\nPENDING: ['T5']\n"
-                "LAST RESULTS:\n  hr_create_user: success=True data={\"user_id\": \"HR-1000\"}"
-            ),
-            "assistant": json.dumps({
-                "tool": "jira_create_ticket",
-                "params": {"summary": "Engineering intern environment setup", "issue_type": "Task", "priority": "medium"},
-                "reasoning": "T1 is done so T2's dependency is satisfied — creating Jira ticket now."
-            }),
+            "user": "WORKFLOW: Report bug\nCOMPLETED: ['T1']\nAVAILABLE NOW: ['T2']\nLAST RESULTS:\n  jira_create_ticket: success=True data={\"ticket_id\": \"PROJ-100\"}",
+            "assistant": json.dumps({"tool": "jira_assign_ticket", "params": {"ticket_id": "PROJ-100", "assignee": "oncall"}, "reasoning": "T1 done, assigning ticket PROJ-100."}),
         },
         {
             "system": SYSTEM_PROMPT,
-            "user": (
-                "WORKFLOW: Report a production bug\n"
-                "ALL TASKS:\n"
-                "  [T1] Create bug ticket: tool=jira_create_ticket, deps=[], rule=none\n"
-                "  [T2] Assign ticket to on-call engineer: tool=jira_assign_ticket, deps=[T1], rule=Ticket must exist.\n"
-                "  [T3] Notify team on Slack: tool=slack_send_message, deps=[T1], rule=none\n"
-                "COMPLETED: ['T1', 'T2', 'T3']\nAVAILABLE NOW: ['T4']\nPENDING: []"
-            ),
-            "assistant": json.dumps({
-                "tool": "email_send",
-                "params": {"to": "customer@enterprise.com", "subject": "Issue acknowledgement", "body": "We are aware of the issue and our team is investigating urgently."},
-                "reasoning": "T1, T2, T3 are complete so T4 (email customer) is now available."
-            }),
-        },
-        {
-            "system": SYSTEM_PROMPT,
-            "user": (
-                "WORKFLOW: Product feature launch\n"
-                "ALL TASKS: [...13 tasks...]\n"
-                "COMPLETED: ['T1','T2','T3','T4','T5','T6','T7','T8','T9']\n"
-                "AVAILABLE NOW: []\nPENDING: []"
-            ),
-            "assistant": json.dumps({
-                "tool": "done",
-                "params": {},
-                "reasoning": "All 9 tasks are complete — signalling done."
-            }),
+            "user": "WORKFLOW: Onboard\nCOMPLETED: ['T1','T2','T3','T4','T5']\nAVAILABLE NOW: []\nPENDING: []",
+            "assistant": json.dumps({"tool": "done", "params": {}, "reasoning": "All tasks complete."}),
         },
     ]
-    return examples
 
 
-# ── Main training loop ────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    print(f"[train] Base model: {BASE_MODEL}", flush=True)
-    print(f"[train] Tasks: {TASKS}", flush=True)
-    print(f"[train] Episodes: {NUM_EPISODES}", flush=True)
-
+    print(f"[train] model={BASE_MODEL}  tasks={TASKS}  episodes={NUM_EPISODES}  eval_every={EVAL_EVERY}")
     try:
         from unsloth import FastLanguageModel
-        from trl import GRPOConfig, GRPOTrainer
+        from trl import GRPOConfig, GRPOTrainer, SFTConfig, SFTTrainer
         from datasets import Dataset
-        import torch
     except ImportError as e:
-        print(f"[ERROR] Missing dependency: {e}")
-        print("Run: pip install unsloth trl transformers accelerate peft datasets")
+        print(f"[ERROR] {e}\nRun: pip install unsloth trl transformers accelerate peft datasets")
         sys.exit(1)
 
-    # ── Load model ────────────────────────────────────────────────────────────
-    print("[train] Loading model with Unsloth...", flush=True)
+    print("[train] Loading model...", flush=True)
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=BASE_MODEL,
-        max_seq_length=MAX_SEQ_LEN,
-        dtype=None,
-        load_in_4bit=True,
-        token=HF_TOKEN or None,
+        model_name=BASE_MODEL, max_seq_length=MAX_SEQ_LEN,
+        dtype=None, load_in_4bit=True, token=HF_TOKEN or None,
     )
-
     model = FastLanguageModel.get_peft_model(
-        model,
-        r=LORA_RANK,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
-        lora_alpha=LORA_RANK * 2,
-        lora_dropout=0.0,
-        bias="none",
-        use_gradient_checkpointing="unsloth",
-        random_state=42,
+        model, r=LORA_RANK,
+        target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
+        lora_alpha=LORA_RANK*2, lora_dropout=0.0, bias="none",
+        use_gradient_checkpointing="unsloth", random_state=42,
     )
-    print(f"[train] Trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}", flush=True)
 
-    # ── SFT warm-up ───────────────────────────────────────────────────────────
-    print("[train] Running short SFT warm-up...", flush=True)
-    warmup_data = build_warmup_dataset()
+    def model_fn(prompt: str) -> str:
+        FastLanguageModel.for_inference(model)
+        msgs = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+        text = tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+        inputs = tokenizer(text, return_tensors="pt").to(model.device)
+        import torch
+        with torch.no_grad():
+            out = model.generate(**inputs, max_new_tokens=512, temperature=0.2, do_sample=True)
+        FastLanguageModel.for_training(model)
+        return tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
 
-    def format_example(ex):
-        return {
-            "text": (
-                f"<|system|>\n{ex['system']}<|end|>\n"
-                f"<|user|>\n{ex['user']}<|end|>\n"
-                f"<|assistant|>\n{ex['assistant']}<|end|>"
-            )
-        }
+    # Phase 0 — baseline
+    print("\n[train] === PHASE 0: Pre-training baseline ===", flush=True)
+    for task in TASKS:
+        r = run_episode(model_fn, task)
+        metrics.pre_train_rewards[task] = r["total_reward"]
+        metrics.record_eval(0, task, r["total_reward"], r["difficulty"])
 
-    warmup_dataset = Dataset.from_list([format_example(e) for e in warmup_data])
+    # Phase 1 — SFT warmup
+    print("\n[train] === PHASE 1: SFT warmup ===", flush=True)
+    warmup = build_warmup_dataset()
+    sft_ds = Dataset.from_list([{
+        "text": f"<|system|>\n{e['system']}<|end|>\n<|user|>\n{e['user']}<|end|>\n<|assistant|>\n{e['assistant']}<|end|>"
+    } for e in warmup])
+    FastLanguageModel.for_training(model)
+    SFTTrainer(model=model, tokenizer=tokenizer, train_dataset=sft_ds,
+               dataset_text_field="text",
+               args=SFTConfig(per_device_train_batch_size=1, num_train_epochs=3,
+                              max_seq_length=MAX_SEQ_LEN, output_dir="./sft_warmup",
+                              logging_steps=1, save_strategy="no", report_to="none")).train()
+    print("[train] SFT warmup done.", flush=True)
 
-    from trl import SFTConfig, SFTTrainer
-    sft_trainer = SFTTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        train_dataset=warmup_dataset,
-        dataset_text_field="text",
-        args=SFTConfig(
-            per_device_train_batch_size=1,
-            num_train_epochs=3,
-            max_seq_length=MAX_SEQ_LEN,
-            output_dir="./sft_warmup",
-            logging_steps=1,
-            save_strategy="no",
-            report_to="none",
-        ),
-    )
-    sft_trainer.train()
-    print("[train] SFT warm-up complete.", flush=True)
-
-    # ── GRPO training ─────────────────────────────────────────────────────────
-    print("[train] Starting GRPO training...", flush=True)
-
-    # Build GRPO prompt dataset — one entry per workflow per task combination
-    grpo_prompts = []
+    # Phase 2 — GRPO
+    print("\n[train] === PHASE 2: GRPO training ===", flush=True)
     sys.path.insert(0, "src")
     from envs.autopilot_env.workflows import TASK_WORKFLOWS
 
+    prompts = []
     for task in TASKS:
         for wf in TASK_WORKFLOWS[task]:
-            # Simulate a mid-episode observation for training diversity
             for i in range(min(3, len(wf["tasks"]))):
                 completed = [t["task_id"] for t in wf["tasks"][:i]]
-                available = [
-                    t["task_id"] for t in wf["tasks"]
-                    if t["task_id"] not in completed
-                    and all(d in completed for d in t.get("dependencies", []))
-                ]
+                available = [t["task_id"] for t in wf["tasks"]
+                             if t["task_id"] not in completed
+                             and all(d in completed for d in t.get("dependencies", []))]
                 tasks_str = "\n".join(
-                    f"  [{t['task_id']}] {t['name']}: tool={t['required_tool']}, "
-                    f"deps={t['dependencies']}"
-                    for t in wf["tasks"]
-                )
-                prompt = (
-                    f"WORKFLOW: {wf['name']}\n"
-                    f"DESC: {wf['description'][:200]}\n\n"
-                    f"ALL TASKS:\n{tasks_str}\n\n"
-                    f"COMPLETED: {completed}\n"
-                    f"AVAILABLE NOW: {available}\n"
-                    f"PENDING: {[t['task_id'] for t in wf['tasks'] if t['task_id'] not in completed and t['task_id'] not in available]}"
-                )
-                grpo_prompts.append({
-                    "prompt": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ]
-                })
+                    f"  [{t['task_id']}] {t['name']}: tool={t['required_tool']}, deps={t['dependencies']}"
+                    for t in wf["tasks"])
+                prompts.append({"prompt": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": (
+                        f"WORKFLOW: {wf['name']}\nDESC: {wf['description'][:200]}\n\n"
+                        f"ALL TASKS:\n{tasks_str}\nCOMPLETED: {completed}\n"
+                        f"AVAILABLE NOW: {available}\n"
+                        f"PENDING: {[t['task_id'] for t in wf['tasks'] if t['task_id'] not in completed and t['task_id'] not in available]}"
+                    )},
+                ]})
 
-    grpo_dataset = Dataset.from_list(grpo_prompts)
-
-    grpo_config = GRPOConfig(
-        per_device_train_batch_size=BATCH_SIZE,
-        gradient_accumulation_steps=GRAD_ACCUM,
-        learning_rate=LR,
-        num_train_epochs=max(1, NUM_EPISODES // len(grpo_prompts)),
-        max_completion_length=512,
-        num_generations=GRPO_K,
-        output_dir="./grpo_output",
-        logging_steps=5,
-        save_steps=50,
-        report_to="none",
-        remove_unused_columns=False,
-    )
-
-    grpo_trainer = GRPOTrainer(
-        model=model,
-        tokenizer=tokenizer,
+    callback = make_callback(lambda: model_fn)
+    GRPOTrainer(
+        model=model, tokenizer=tokenizer,
         reward_funcs=grpo_reward_fn,
-        args=grpo_config,
-        train_dataset=grpo_dataset,
-    )
+        args=GRPOConfig(
+            per_device_train_batch_size=BATCH_SIZE,
+            gradient_accumulation_steps=GRAD_ACCUM,
+            learning_rate=LR,
+            num_train_epochs=max(1, NUM_EPISODES // len(prompts)),
+            max_completion_length=512, num_generations=GRPO_K,
+            output_dir="./grpo_output", logging_steps=5,
+            save_steps=50, report_to="none", remove_unused_columns=False,
+        ),
+        train_dataset=Dataset.from_list(prompts),
+        callbacks=[callback] if callback else None,
+    ).train()
+    print("[train] GRPO done.", flush=True)
 
-    grpo_trainer.train()
-    print("[train] GRPO training complete.", flush=True)
-
-    # ── Evaluation rollouts ───────────────────────────────────────────────────
-    print("[train] Running post-training evaluation rollouts...", flush=True)
+    # Phase 3 — post-training eval
+    print("\n[train] === PHASE 3: Post-training eval ===", flush=True)
     FastLanguageModel.for_inference(model)
-
-    def model_fn(prompt: str) -> str:
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ]
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        inputs = tokenizer(text, return_tensors="pt").to(model.device)
-        with __import__("torch").no_grad():
-            out = model.generate(
-                **inputs,
-                max_new_tokens=512,
-                temperature=0.2,
-                do_sample=True,
-            )
-        return tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-
-    eval_results = {}
+    final_step = metrics._step
     for task in TASKS:
-        result = run_episode_inprocess(model_fn, task)
-        eval_results[task] = result
-        print(
-            f"[eval] task={task} score={result['total_reward']:.3f} "
-            f"completion={result['completion_rate']:.1%}",
-            flush=True,
-        )
+        r = run_episode(model_fn, task)
+        metrics.post_train_rewards[task] = r["total_reward"]
+        metrics.record_eval(final_step, task, r["total_reward"], r["difficulty"])
 
-    overall = sum(r["total_reward"] for r in eval_results.values()) / len(eval_results)
-    print(f"\n[eval] overall_score={overall:.3f}", flush=True)
+    print("\n[train] === IMPROVEMENT SUMMARY ===")
+    for task in TASKS:
+        b = metrics.pre_train_rewards.get(task, 0)
+        a = metrics.post_train_rewards.get(task, 0)
+        print(f"  {task:8s}: {b:.3f} → {a:.3f}  ({a-b:+.3f})")
 
-    # ── Save metrics ──────────────────────────────────────────────────────────
     metrics.save("training_metrics.json")
-    with open("eval_results.json", "w") as f:
-        json.dump(eval_results, f, indent=2)
-
-    # ── Save and optionally push model ────────────────────────────────────────
     model.save_pretrained("./trained_adapter")
     tokenizer.save_pretrained("./trained_adapter")
-    print("[train] Adapter saved to ./trained_adapter", flush=True)
-
     if PUSH_TO_HUB and HF_TOKEN:
         model.push_to_hub(HUB_REPO, token=HF_TOKEN)
-        tokenizer.push_to_hub(HUB_REPO, token=HF_TOKEN)
-        print(f"[train] Pushed to hub: {HUB_REPO}", flush=True)
-
-    print("\n[train] Done.", flush=True)
+    print("\n[train] Done. Run: python train.py plot")
 
 
-# ── Plot reward curve (run after training) ────────────────────────────────────
+# ── Plot ──────────────────────────────────────────────────────────────────────
 
-def plot_reward_curve(metrics_path: str = "training_metrics.json"):
-    """
-    Load saved metrics and print a text-based reward curve for terminals,
-    or save a PNG if matplotlib is available.
-    """
-    with open(metrics_path) as f:
+def plot_reward_curve(path: str = "training_metrics.json"):
+    with open(path) as f:
         data = json.load(f)
 
-    rewards = data["rewards"]
-    difficulty = data["difficulty_scores"]
-    n = len(rewards)
+    grpo_steps   = data.get("grpo_steps", [])
+    grpo_rewards = data.get("grpo_rewards", [])
+    eval_steps   = data.get("eval_steps", [])
+    eval_rewards = data.get("eval_rewards", [])
+    eval_tasks   = data.get("eval_tasks", [])
+    difficulty   = data.get("difficulty", [])
+    pre          = data.get("pre_train_rewards", {})
+    post         = data.get("post_train_rewards", {})
 
     try:
         import matplotlib.pyplot as plt
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7))
-        window = 10
-        smoothed = [
-            sum(rewards[max(0, i - window):i + 1]) / len(rewards[max(0, i - window):i + 1])
-            for i in range(n)
-        ]
-        ax1.plot(rewards, alpha=0.3, color="steelblue", label="raw reward")
-        ax1.plot(smoothed, color="steelblue", linewidth=2, label=f"rolling avg ({window})")
-        ax1.set_ylabel("Episode reward")
-        ax1.set_title("Reward curve — Adaptive Enterprise Autopilot")
-        ax1.legend()
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+        fig.suptitle("Training Progress — Adaptive Enterprise Autopilot", fontsize=14, fontweight="bold")
+
+        # Top: GRPO rewards
+        if grpo_steps:
+            ax1.plot(grpo_steps, grpo_rewards, alpha=0.25, color="steelblue", linewidth=1, label="GRPO step reward")
+            w = max(1, len(grpo_rewards) // 10)
+            smoothed = [sum(grpo_rewards[max(0,i-w):i+1])/len(grpo_rewards[max(0,i-w):i+1]) for i in range(len(grpo_rewards))]
+            ax1.plot(grpo_steps, smoothed, color="steelblue", linewidth=2, label=f"Rolling avg ({w} steps)")
+
+        # Eval dots coloured by task
+        colors = {"easy": "#2ecc71", "medium": "#f39c12", "hard": "#e74c3c"}
+        seen = set()
+        for s, r, t in zip(eval_steps, eval_rewards, eval_tasks):
+            c = colors.get(t, "grey")
+            lbl = f"Eval — {t}" if t not in seen else None
+            ax1.scatter(s, r, color=c, s=100, zorder=5, label=lbl, edgecolors="white", linewidths=0.5)
+            seen.add(t)
+
+        # Before / after lines
+        if pre and post:
+            pre_avg  = sum(pre.values()) / len(pre)
+            post_avg = sum(post.values()) / len(post)
+            ax1.axhline(pre_avg,  color="tomato",        linestyle="--", linewidth=1.5, label=f"Pre-train avg ({pre_avg:.2f})")
+            ax1.axhline(post_avg, color="mediumseagreen", linestyle="--", linewidth=1.5, label=f"Post-train avg ({post_avg:.2f})")
+
+        ax1.set_ylabel("Reward", fontsize=11)
+        ax1.set_title("GRPO step rewards + evaluation checkpoints (coloured by task difficulty)", fontsize=10)
+        ax1.legend(loc="upper left", fontsize=8, ncol=2)
+        ax1.axhline(0, color="black", linewidth=0.5, alpha=0.5)
         ax1.grid(alpha=0.3)
 
-        ax2.plot(difficulty, color="coral", linewidth=1.5)
-        ax2.set_ylabel("Workflow difficulty")
-        ax2.set_xlabel("Episode")
-        ax2.set_title("Auto-generated workflow difficulty (T4 self-improvement)")
-        ax2.set_ylim(0, 1)
-        ax2.grid(alpha=0.3)
+        # Bottom: difficulty
+        if eval_steps and difficulty:
+            ax2.plot(eval_steps, difficulty, color="coral", linewidth=2, marker="o", markersize=6, label="Curriculum difficulty (T4)")
+            ax2.fill_between(eval_steps, difficulty, alpha=0.15, color="coral")
+            ax2.set_ylim(0, 1.05)
+            ax2.set_ylabel("Difficulty (0–1)", fontsize=11)
+            ax2.set_xlabel("Training step", fontsize=11)
+            ax2.set_title("Auto-generated workflow difficulty — T4 self-improvement loop", fontsize=10)
+            ax2.legend(fontsize=9)
+            ax2.grid(alpha=0.3)
 
         plt.tight_layout()
         plt.savefig("reward_curve.png", dpi=150)
-        print("[plot] Saved to reward_curve.png")
+        print(f"[plot] Saved reward_curve.png  ({len(grpo_steps)} GRPO steps, {len(eval_steps)} eval points)")
+
+        if pre and post:
+            print("\nImprovement summary:")
+            for t in TASKS:
+                b = pre.get(t, 0); a = post.get(t, 0)
+                print(f"  {t:8s}: {b:.3f} → {a:.3f}  ({a-b:+.3f})")
+
     except ImportError:
-        # ASCII fallback
-        print(f"\nReward curve ({n} episodes):")
-        step = max(1, n // 40)
-        for i in range(0, n, step):
-            r = rewards[i]
-            bar = "█" * int(max(0, r) * 10)
-            print(f"  ep {i:4d}: {r:+.3f} {bar}")
+        if pre and post:
+            for t in pre:
+                print(f"  {t}: {pre[t]:.3f} → {post.get(t,'?')}")
 
 
 if __name__ == "__main__":
