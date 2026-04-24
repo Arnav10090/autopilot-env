@@ -84,24 +84,13 @@ After each episode, the environment **generates a harder variant** of the comple
 
 ```bash
 # Health check
-curl https://your-username-adaptive-enterprise-autopilot.hf.space/health
+curl https://arnav100904-adaptive-enterprise-autopilot.hf.space/health
 
 # Start an easy episode (onboard new intern)
-curl -X POST https://your-username-adaptive-enterprise-autopilot.hf.space/reset?task=easy \
-  -H "Content-Type: application/json" -d '{}'
+Invoke-WebRequest -Uri "https://arnav100904-adaptive-enterprise-autopilot.hf.space/reset?task=easy" -Method POST -Headers @{"Content-Type"="application/json"} -Body '{}'
 
 # Submit a tool call
-curl -X POST https://your-username-adaptive-enterprise-autopilot.hf.space/step \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tool": "hr_create_user",
-    "params": {
-      "name": "Priya Sharma",
-      "role": "Software Engineer",
-      "department": "Engineering"
-    },
-    "reasoning": "T1 has no dependencies — creating HR record first to unblock T2."
-  }'
+Invoke-WebRequest -Uri "https://arnav100904-adaptive-enterprise-autopilot.hf.space/step" -Method POST -Headers @{"Content-Type"="application/json"} -Body '{"tool": "hr_create_user","params": {"name": "Priya Sharma","role": "Software Engineer","department": "Engineering"},"reasoning": "T1 has no dependencies — creating HR record first to unblock T2."}'
 ```
 
 ---
