@@ -19,7 +19,7 @@ capped at 10 (after which the hardest seed workflow is recycled with minor namin
 from __future__ import annotations
 import copy
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -53,6 +53,8 @@ def generate_harder_workflow(base: Dict[str, Any], delta: int = 1) -> Dict[str, 
         wf = _add_parallel_track(wf)
     if target_level >= 9:
         wf = _add_strict_rule(wf)
+    if target_level >= 8:
+        wf = _add_chaos_mode(wf)
 
     # Recalculate max_steps
     n = len(wf["tasks"])
@@ -62,6 +64,55 @@ def generate_harder_workflow(base: Dict[str, Any], delta: int = 1) -> Dict[str, 
         base["description"]
         + f"\n\n[Generated variant — difficulty {wf['difficulty_level']}/10. "
         "Additional tasks and constraints have been added.]"
+    )
+    return wf
+
+def generate_easier_workflow(workflow: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    De-escalate: remove the most recently added peripheral tasks.
+    Returns None if already at minimum difficulty (can't simplify further).
+    """
+    import copy
+    current_level = workflow.get("difficulty_level", 1)
+    if current_level <= 1:
+        return None  # already at floor
+
+    wf = copy.deepcopy(workflow)
+    wf["workflow_id"] = f"W_GEN_{uuid.uuid4().hex[:6].upper()}"
+    wf["difficulty_level"] = max(1, current_level - 1)
+    wf["generated"] = True
+
+    tasks = wf["tasks"]
+    all_ids = {t["task_id"] for t in tasks}
+    depended_on = set()
+    for t in tasks:
+        depended_on.update(t.get("dependencies", []))
+    leaves = [t for t in tasks if t["task_id"] not in depended_on]
+
+    # Remove up to 2 leaf tasks (the ones most recently generated)
+    # Only remove tasks that were clearly added by the generator
+    # (they have generated names or are beyond the seed task count)
+    removable = [
+        t for t in leaves
+        if any(kw in t["name"].lower() for kw in [
+            "notification", "compliance", "consolidat", "audit",
+            "verification", "secondary", "confirm"
+        ])
+    ][:2]
+
+    remove_ids = {t["task_id"] for t in removable}
+    wf["tasks"] = [t for t in tasks if t["task_id"] not in remove_ids]
+
+    # Clean up any dependencies pointing to removed tasks
+    for t in wf["tasks"]:
+        t["dependencies"] = [d for d in t.get("dependencies", []) if d not in remove_ids]
+
+    n = len(wf["tasks"])
+    wf["max_steps"] = max(n * 3, 10)
+    wf["name"] = f"{workflow['name'].split(' (difficulty')[0]} (difficulty {wf['difficulty_level']})"
+    wf["description"] = (
+        workflow["description"].split("\n\n[Generated")[0]
+        + f"\n\n[De-escalated variant — difficulty {wf['difficulty_level']}/10.]"
     )
     return wf
 
@@ -272,4 +323,34 @@ def _add_strict_rule(wf: Dict) -> Dict:
         "is_blocker": False,
         "points": 2.0,
     })
+    return wf
+
+def _add_chaos_mode(wf: Dict) -> Dict:
+    """
+    Difficulty 8+: two APIs simultaneously degraded.
+    Converts the two highest-points non-blocker tasks into blockers.
+    Adds a description note that both must be retried.
+    """
+    candidates = [
+        t for t in wf["tasks"]
+        if not t.get("is_blocker") and t.get("points", 1.0) >= 1.0
+    ]
+    if len(candidates) < 2:
+        return wf
+
+    targets = sorted(candidates, key=lambda x: -x.get("points", 1.0))[:2]
+    target_ids = {t["task_id"] for t in targets}
+
+    for t in wf["tasks"]:
+        if t["task_id"] in target_ids:
+            t["is_blocker"] = True
+            t["business_rule"] = (
+                (t.get("business_rule") or "") +
+                " [CHAOS MODE: API degraded — first call will fail. Retry required.]"
+            ).strip()
+
+    wf["description"] += (
+        "\n\n⚠ CHAOS MODE ACTIVE: Two enterprise APIs are simultaneously degraded. "
+        "The agent must detect failures via tool_results and retry both."
+    )
     return wf

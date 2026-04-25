@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .grader import grade_step, grade_episode, resolve_task
 from .models import AutopilotAction, AutopilotObservation, AutopilotState
 from .tools import MockToolRegistry
-from .workflow_gen import generate_harder_workflow, difficulty_score
+from .workflow_gen import generate_harder_workflow, generate_easier_workflow, difficulty_score
 from .workflows import TASK_WORKFLOWS
 
 
@@ -179,30 +179,50 @@ class AutopilotEnvironment:
     # ── T4: Self-improvement ──────────────────────────────────────────────────
 
     def _run_self_improvement(self):
-        """
-        After each episode, generate a harder variant of the workflow
-        and store it so the next reset() uses the harder version.
-        """
         if self._workflow is None:
             return
         completion_rate = (
             len(self._completed_ids) / len(self._workflow["tasks"])
             if self._workflow["tasks"] else 0.0
         )
-        # Only escalate difficulty if the agent performed reasonably well
-        delta = 1 if completion_rate >= 0.5 else 0
-        if delta > 0:
-            harder = generate_harder_workflow(self._workflow, delta=delta)
-            # Store under the ORIGINAL base workflow ID so we can look it up next reset
-            base_id = self._workflow.get("workflow_id", "")
-            # Strip "W_GEN_" prefix if this is already a generated one
-            for base in self._base_workflows:
-                if base["workflow_id"] == base_id or self._workflow.get("generated"):
-                    self._generated_workflows[base["workflow_id"]] = harder
-                    break
+
+        # Track consecutive poor episodes per workflow
+        base_id = self._workflow.get("workflow_id", "")
+        for base in self._base_workflows:
+            if base["workflow_id"] == base_id or self._workflow.get("generated"):
+                base_id = base["workflow_id"]
+                break
+
+        if not hasattr(self, "_poor_streak"):
+            self._poor_streak = {}
+
+        if completion_rate >= 0.5:
+            # Escalate
+            self._poor_streak[base_id] = 0
+            harder = generate_harder_workflow(self._workflow, delta=1)
+            self._generated_workflows[base_id] = harder
             self._state.generated_next_workflow = harder
             self._state.metadata["next_difficulty"] = harder.get("difficulty_level", 1)
-            self._state.metadata["next_difficulty_score"] = difficulty_score(harder)
+            self._state.metadata["curriculum_direction"] = "UP"
+
+        elif completion_rate < 0.3:
+            # De-escalate after 2 consecutive poor episodes
+            streak = self._poor_streak.get(base_id, 0) + 1
+            self._poor_streak[base_id] = streak
+            self._state.metadata["poor_streak"] = streak
+
+            if streak >= 2:
+                current = self._generated_workflows.get(base_id, self._workflow)
+                easier = generate_easier_workflow(current)
+                if easier is not None:
+                    self._generated_workflows[base_id] = easier
+                    self._state.generated_next_workflow = easier
+                    self._state.metadata["next_difficulty"] = easier.get("difficulty_level", 1)
+                    self._state.metadata["curriculum_direction"] = "DOWN"
+                    self._poor_streak[base_id] = 0
+        else:
+            self._poor_streak[base_id] = 0
+            self._state.metadata["curriculum_direction"] = "HOLD"
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 

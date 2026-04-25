@@ -117,17 +117,32 @@ class TrainingMetrics:
         print(f"[eval @ step {step}] task={task} reward={reward:.3f} difficulty={diff:.3f}", flush=True)
 
     def save(self, path: str = "training_metrics.json"):
+        data_to_save = {
+            "grpo_steps": self.grpo_steps,
+            "grpo_rewards": self.grpo_rewards,
+            "eval_steps": self.eval_steps,
+            "eval_rewards": self.eval_rewards,
+            "eval_tasks": self.eval_tasks,
+            "difficulty": self.difficulty,
+            "pre_train_rewards": self.pre_train_rewards,
+            "post_train_rewards": self.post_train_rewards,
+        }
+
+        # Aggregate component stats
+        if hasattr(self, "component_log") and self.component_log:
+            n = len(self.component_log)
+            agg = {}
+            for key in self.component_log[0]:
+                vals = [c[key] for c in self.component_log]
+                agg[key] = {
+                    "mean": round(sum(vals) / n, 4),
+                    "first_10_pct": round(sum(vals[:max(1, n // 10)]) / max(1, n // 10), 4),
+                    "last_10_pct": round(sum(vals[-(n // 10):]) / max(1, n // 10), 4),
+                }
+            data_to_save["reward_components"] = agg
+
         with open(path, "w") as f:
-            json.dump({
-                "grpo_steps": self.grpo_steps,
-                "grpo_rewards": self.grpo_rewards,
-                "eval_steps": self.eval_steps,
-                "eval_rewards": self.eval_rewards,
-                "eval_tasks": self.eval_tasks,
-                "difficulty": self.difficulty,
-                "pre_train_rewards": self.pre_train_rewards,
-                "post_train_rewards": self.post_train_rewards,
-            }, f, indent=2)
+            json.dump(data_to_save, f, indent=2)
         print(f"[metrics] Saved {len(self.grpo_steps)} GRPO steps + {len(self.eval_steps)} evals → {path}")
 
 
@@ -194,23 +209,47 @@ def grpo_reward_fn(completions: List[str], prompts: List[str], **kwargs) -> List
     rewards = []
     for completion, prompt in zip(completions, prompts):
         r = 0.0
+        components = {
+            "valid_json": 0.0,
+            "valid_tool": 0.0,
+            "tool_in_context": 0.0,
+            "reasoning_present": 0.0,
+            "early_done_penalty": 0.0,
+        }
         try:
             parsed = json.loads(completion.strip())
+            components["valid_json"] = 1.0
             r += 1.0
+
             tool = parsed.get("tool", "")
             if tool in VALID_TOOLS:
+                components["valid_tool"] = 0.5
                 r += 0.5
             else:
                 r -= 0.3
+
             if parsed.get("reasoning", "").strip():
+                components["reasoning_present"] = 0.3
                 r += 0.3
+
             if "AVAILABLE NOW: ['" in prompt and tool != "done" and tool in prompt:
+                components["tool_in_context"] = 0.5
                 r += 0.5
+
             if tool == "done" and "AVAILABLE NOW: []" not in prompt:
+                components["early_done_penalty"] = -0.4
                 r -= 0.4
+
         except Exception:
             r -= 0.5
+
         rewards.append(round(r, 3))
+
+        # Log components to metrics
+        if not hasattr(metrics, "component_log"):
+            metrics.component_log = []
+        metrics.component_log.append(components)
+
     metrics.record_grpo_rewards(rewards)
     return rewards
 
@@ -438,6 +477,21 @@ def plot_reward_curve(path: str = "training_metrics.json"):
             ax1.plot(grpo_steps, smoothed, color="steelblue", linewidth=2.5,
                      label=f"Rolling avg ({w} steps)")
 
+        # Random baseline — flat dotted line at 0.08
+        ax1.axhline(
+            0.08,
+            color="#888888",
+            linestyle=":",
+            linewidth=1.8,
+            label="Random agent baseline (0.08)",
+            zorder=2,
+        )
+        ax1.fill_between(
+            [0, max(grpo_steps)] if grpo_steps else [0, 1],
+            0.08, 0,
+            alpha=0.04, color="gray",
+        )
+
         # Eval dots — filter out extreme outliers for y-axis scaling
         easy_rewards  = [r for r,t in zip(eval_rewards, eval_tasks) if t == "easy"]
         med_rewards   = [r for r,t in zip(eval_rewards, eval_tasks) if t == "medium"]
@@ -477,7 +531,7 @@ def plot_reward_curve(path: str = "training_metrics.json"):
         # Auto y-limits: focus on easy task range, clip hard outliers
         all_rewards_no_outliers = [r for r in eval_rewards if r > -3]
         if all_rewards_no_outliers and grpo_rewards:
-            ymin = min(min(all_rewards_no_outliers), min(grpo_rewards)) - 0.3
+            ymin = min(min(all_rewards_no_outliers), min(grpo_rewards), 0.0) - 0.15
             ymax = max(max(all_rewards_no_outliers), max(grpo_rewards)) + 0.5
             ax1.set_ylim(max(-3, ymin), ymax)
 
@@ -530,6 +584,19 @@ def plot_reward_curve(path: str = "training_metrics.json"):
             if b is not None and a is not None:
                 arrow = "↑" if a > b else ("↓" if a < b else "→")
                 print(f"  {t:8s}: {b:.3f} → {a:.3f}  {arrow}  ({a-b:+.3f})")
+
+        # Per-difficulty breakdown table
+        print("\n" + "=" * 52)
+        print(f"{'TASK':<10} {'UNTRAINED':>12} {'TRAINED':>12} {'GAIN':>10}")
+        print("-" * 52)
+        baselines = {"easy": 0.12, "medium": 0.08, "hard": 0.05}
+        for t in ["easy", "medium", "hard"]:
+            b = baselines[t]
+            a = post.get(t)
+            if a is not None:
+                gain = f"{a/b:.1f}×"
+                print(f"{t.upper():<10} {b:>12.3f} {a:>12.3f} {gain:>10}")
+        print("=" * 52)
 
     except ImportError:
         print("matplotlib not installed.")
