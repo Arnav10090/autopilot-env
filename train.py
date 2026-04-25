@@ -980,7 +980,7 @@ def plot_reward_curve(path: str = "training_metrics.json"):
         ax1.axhline(0, color="black", linewidth=0.5, alpha=0.4)
         if grpo_steps:
             ax1.set_xlim(-0.3, max(grpo_steps) + 0.3)
-            ax1.set_xticks(range(0, max(grpo_steps) + 1))
+            ax1.set_xticks(range(0, max(grpo_steps) + 1, 10))
         ax1.grid(alpha=0.3)
 
         all_rewards_no_outliers = [r for r in eval_rewards if r > -3]
@@ -1036,7 +1036,7 @@ def plot_reward_curve(path: str = "training_metrics.json"):
         ax2.grid(alpha=0.3)
         if easy_diff_steps:
             ax2.set_xlim(-0.3, max(easy_diff_steps) + 0.3)
-            ax2.set_xticks(range(0, max(easy_diff_steps) + 1))
+            ax2.set_xticks(range(0, max(easy_diff_steps) + 1, 10))
 
         plt.tight_layout(rect=[0, 0, 0.84, 0.96])
         plt.savefig("reward_curve.png", dpi=150, bbox_inches="tight")
