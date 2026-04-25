@@ -16,6 +16,9 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from .grader import grade_step, grade_episode, resolve_task
+from .pbrs import potential as pbrs_potential, shaping_term, GAMMA as PBRS_GAMMA, PBRS_WEIGHT
+from .intrinsic import IntrinsicCounter, INTRINSIC_WEIGHT
+from .reward_combiner import RewardCombiner
 from .judge_features import build_judge_input
 from .judge_types import JudgeExample
 from .models import AutopilotAction, AutopilotObservation, AutopilotState
@@ -58,6 +61,9 @@ class AutopilotEnvironment:
         self._judge_alpha = float(judge_alpha)
         self._judge_enabled = bool(judge_enabled)
         self._judge_buffer = judge_buffer
+        self._intrinsic = IntrinsicCounter()
+        self._reward_combiner = RewardCombiner()
+        self._last_reward_breakdown: Dict[str, Any] = {}
         self._current_episode_judge_examples: List[JudgeExample] = []
 
     # ── OpenEnv API ───────────────────────────────────────────────────────────
@@ -76,6 +82,8 @@ class AutopilotEnvironment:
         self._tool_history = []
         self._current_episode_judge_examples = []
         self._episode_started = True
+        self._intrinsic.reset_episode()
+        self._last_reward_breakdown = {}
 
         self._state = AutopilotState(
             episode_id=str(uuid.uuid4()),
@@ -113,6 +121,8 @@ class AutopilotEnvironment:
             raise RuntimeError("Call reset() before step().")
 
         self._state.step_count += 1
+        # PBRS: snapshot Φ(s) BEFORE the action mutates self._completed_ids
+        _phi_before = pbrs_potential(self._workflow, self._completed_ids)
         max_steps = self._workflow.get("max_steps", len(self._workflow["tasks"]) * 3)
         tool_result: Dict[str, Any] = {}
         episode_bonus = 0.0
@@ -124,6 +134,7 @@ class AutopilotEnvironment:
             self._completed_ids,
             self._tools.summary(),
         )
+        breakdown["_phi_before"] = _phi_before
         judge_input = None
         judge_prediction = None
         judge_score = 0.0
@@ -205,11 +216,37 @@ class AutopilotEnvironment:
             # T4: generate harder workflow for next time
             self._run_self_improvement()
 
-        total_step_reward = round(
-            step_reward + episode_bonus + (self._judge_alpha * judge_score),
-            4,
+        # ── PBRS shaping + count-based intrinsic ──────────────────────────────
+        phi_before = float(breakdown.get("_phi_before", 0.0))
+        phi_after = pbrs_potential(self._workflow, self._completed_ids)
+        pbrs_term = shaping_term(phi_before, phi_after, gamma=PBRS_GAMMA)
+
+        intrinsic_term = self._intrinsic.bonus(
+            workflow_id=self._workflow.get("workflow_id", ""),
+            completed_ids=list(self._completed_ids),
+            tool=action.tool or "",
         )
+
+        extrinsic_total = step_reward + episode_bonus + (self._judge_alpha * judge_score)
+        combined = self._reward_combiner.combine(
+            extrinsic=extrinsic_total,
+            pbrs=pbrs_term,
+            intrinsic=intrinsic_term,
+        )
+
+        breakdown["pbrs_shaping"]    = round(combined["pbrs_shaping"], 4)
+        breakdown["intrinsic_count"] = round(combined["intrinsic_count"], 4)
+        breakdown["extrinsic_step"]  = round(step_reward, 4)
+        breakdown["extrinsic_total"] = round(extrinsic_total, 4)
+        breakdown["phi_before"]      = round(phi_before, 4)
+        breakdown["phi_after"]       = round(phi_after, 4)
+        breakdown["intrinsic_decay_factor"] = round(self._intrinsic.decay_factor(), 4)
+        breakdown["intrinsic_episode_idx"]  = self._intrinsic.episode_idx
+        breakdown["reward_combiner_mode"]   = self._reward_combiner.mode
+
+        total_step_reward = round(combined["total"], 4)
         self._state.total_reward += total_step_reward
+        self._last_reward_breakdown = dict(breakdown)
 
         if judge_input is not None:
             self._current_episode_judge_examples.append(JudgeExample(
