@@ -4,6 +4,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ ./src/
 COPY server/ ./server/
+COPY judge_model.pkl ./judge_model.pkl
 ENV AUTOPILOT_TASK=easy
 ENV HOST=0.0.0.0
 ENV PORT=7860
