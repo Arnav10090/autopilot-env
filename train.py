@@ -154,6 +154,8 @@ class TrainingMetrics:
     eval_tasks: List[str]     = field(default_factory=list)
     eval_phase: List[str]     = field(default_factory=list)
     difficulty: List[float]   = field(default_factory=list)
+    episodes_to_threshold_0_5: int = -1   # first episode where eval_reward >= 0.5
+    episodes_to_threshold_1_0: int = -1   # first episode where eval_reward >= 1.0
     pre_train_rewards: Dict[str, float]  = field(default_factory=dict)
     post_train_rewards: Dict[str, float] = field(default_factory=dict)
     _step: int = field(default=0, repr=False)
@@ -181,6 +183,15 @@ class TrainingMetrics:
         self.eval_tasks.append(task)
         self.eval_phase.append(phase)
         self.difficulty.append(round(diff, 4))
+
+        ep_idx = len(self.eval_rewards)
+        if self.episodes_to_threshold_0_5 < 0 and reward >= 0.5:
+            self.episodes_to_threshold_0_5 = ep_idx
+            print(f"[milestone] reached reward >= 0.5 in {ep_idx} eval episodes", flush=True)
+        if self.episodes_to_threshold_1_0 < 0 and reward >= 1.0:
+            self.episodes_to_threshold_1_0 = ep_idx
+            print(f"[milestone] reached reward >= 1.0 in {ep_idx} eval episodes", flush=True)
+
         print(
             f"[eval @ step {step}] phase={phase} task={task} "
             f"score={reward:.3f} difficulty={diff:.3f}",
@@ -196,6 +207,8 @@ class TrainingMetrics:
             "eval_tasks": self.eval_tasks,
             "eval_phase": self.eval_phase,
             "difficulty": self.difficulty,
+            "episodes_to_threshold_0_5": self.episodes_to_threshold_0_5,
+            "episodes_to_threshold_1_0": self.episodes_to_threshold_1_0,
             "pre_train_rewards": self.pre_train_rewards,
             "post_train_rewards": self.post_train_rewards,
         }
