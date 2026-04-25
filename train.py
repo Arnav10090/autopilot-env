@@ -32,14 +32,14 @@ PUSH_TO_HUB  = os.getenv("PUSH_TO_HUB", "0") == "1"
 HUB_REPO     = os.getenv("HUB_REPO",    "your-user/autopilot-agent")
 NUM_EPISODES = int(os.getenv("NUM_EPISODES", "200"))
 TASKS        = os.getenv("TASKS", "easy,medium,hard").split(",")
-EVAL_EVERY   = int(os.getenv("EVAL_EVERY", "10"))   # eval rollout every N GRPO steps
+EVAL_EVERY   = int(os.getenv("EVAL_EVERY", "1"))    # eval rollout every N GRPO steps (1 = every step, good for short runs)
 
 MAX_SEQ_LEN  = 4096
 LORA_RANK    = 16
 BATCH_SIZE   = 2
 GRAD_ACCUM   = 4
 LR           = 2e-5
-MAX_STEPS_EP = 30
+MAX_STEPS_EP = 15   # capped at 15 to avoid runaway negative rewards on hard tasks with weak model
 GRPO_K       = 4
 
 SYSTEM_PROMPT = textwrap.dedent("""
@@ -158,11 +158,13 @@ def run_episode(model_fn, task: str) -> Dict[str, Any]:
             tool=tool, params=d.get("params", {}), reasoning=d.get("reasoning", "")))
         total += r
         steps += 1
-    return {
-        "total_reward": total,
-        "completion_rate": env.state.tasks_completed / max(env.state.tasks_total, 1),
-        "difficulty": obs.difficulty_level / 10.0,
-    }
+    completion_rate = env.state.tasks_completed / max(env.state.tasks_total, 1)
+    if env.state.generated_next_workflow:
+        from envs.autopilot_env.workflow_gen import difficulty_score as _ds
+        diff = _ds(env.state.generated_next_workflow)
+    else:
+        diff = obs.difficulty_level / 10.0
+    return {"total_reward": total, "completion_rate": completion_rate, "difficulty": diff}
 
 
 def _build_prompt(obs) -> str:
@@ -240,21 +242,41 @@ def make_callback(get_model_fn):
 # ── Warmup dataset ────────────────────────────────────────────────────────────
 
 def build_warmup_dataset():
+    """
+    6 high-quality examples covering: first move, mid-episode tool chaining,
+    using IDs from previous results, parallel track, and done signal.
+    5 epochs over these = enough to stabilise JSON output before GRPO.
+    """
     return [
         {
             "system": SYSTEM_PROMPT,
-            "user": "WORKFLOW: Onboard new intern\nALL TASKS:\n  [T1] Create HR profile: tool=hr_create_user, deps=[]\nCOMPLETED: []\nAVAILABLE NOW: ['T1']\nPENDING: ['T2']",
-            "assistant": json.dumps({"tool": "hr_create_user", "params": {"name": "Intern", "role": "Intern", "department": "Engineering"}, "reasoning": "T1 has no deps — first move."}),
+            "user": "WORKFLOW: Onboard new intern\nALL TASKS:\n  [T1] Create HR profile: tool=hr_create_user, deps=[]\n  [T2] Create Jira ticket: tool=jira_create_ticket, deps=[T1]\nCOMPLETED: []\nAVAILABLE NOW: ['T1']\nPENDING: ['T2']",
+            "assistant": json.dumps({"tool": "hr_create_user", "params": {"name": "Alice Singh", "role": "Software Intern", "department": "Engineering"}, "reasoning": "T1 has no dependencies and must be completed first to unblock T2."}),
         },
         {
             "system": SYSTEM_PROMPT,
-            "user": "WORKFLOW: Report bug\nCOMPLETED: ['T1']\nAVAILABLE NOW: ['T2']\nLAST RESULTS:\n  jira_create_ticket: success=True data={\"ticket_id\": \"PROJ-100\"}",
-            "assistant": json.dumps({"tool": "jira_assign_ticket", "params": {"ticket_id": "PROJ-100", "assignee": "oncall"}, "reasoning": "T1 done, assigning ticket PROJ-100."}),
+            "user": "WORKFLOW: Report a production bug\nALL TASKS:\n  [T1] Create bug ticket: tool=jira_create_ticket, deps=[]\n  [T2] Assign ticket: tool=jira_assign_ticket, deps=[T1]\nCOMPLETED: ['T1']\nAVAILABLE NOW: ['T2', 'T3']\nLAST RESULTS:\n  jira_create_ticket: success=True data={\"ticket_id\": \"PROJ-100\"}",
+            "assistant": json.dumps({"tool": "jira_assign_ticket", "params": {"ticket_id": "PROJ-100", "assignee": "oncall_engineer"}, "reasoning": "T1 done and ticket_id is PROJ-100 — using that ID to assign T2 now."}),
         },
         {
             "system": SYSTEM_PROMPT,
-            "user": "WORKFLOW: Onboard\nCOMPLETED: ['T1','T2','T3','T4','T5']\nAVAILABLE NOW: []\nPENDING: []",
-            "assistant": json.dumps({"tool": "done", "params": {}, "reasoning": "All tasks complete."}),
+            "user": "WORKFLOW: Set up a new project team\nALL TASKS:\n  [T1] Register lead in HR: tool=hr_create_user, deps=[]\n  [T2] Create Jira Epic: tool=jira_create_ticket, deps=[T1]\n  [T3] Create Slack channel: tool=slack_create_channel, deps=[T1]\nCOMPLETED: ['T1']\nAVAILABLE NOW: ['T2', 'T3']\nPENDING: ['T4']",
+            "assistant": json.dumps({"tool": "jira_create_ticket", "params": {"summary": "Project Alpha Epic", "issue_type": "Epic"}, "reasoning": "T1 done so T2 and T3 are both available — completing T2 first as it has the highest points."}),
+        },
+        {
+            "system": SYSTEM_PROMPT,
+            "user": "WORKFLOW: Onboard new intern\nALL TASKS:\n  [T3] Send Slack welcome: tool=slack_send_message, deps=[T1]\n  [T4] Schedule intro meeting: tool=calendar_create_event, deps=[T1]\n  [T5] Send onboarding email: tool=email_send, deps=[T3, T4]\nCOMPLETED: ['T1','T2','T3','T4']\nAVAILABLE NOW: ['T5']\nPENDING: []",
+            "assistant": json.dumps({"tool": "email_send", "params": {"to": "alice@company.com", "subject": "Welcome — first day instructions", "body": "Hi Alice, welcome to the team! Please report to building B at 9am on Monday."}, "reasoning": "T3 and T4 are both complete so T5 dependency is satisfied — sending onboarding email now."}),
+        },
+        {
+            "system": SYSTEM_PROMPT,
+            "user": "WORKFLOW: Offboard departing employee\nALL TASKS:\n  [T1] Update HR status: tool=hr_update_user, deps=[]\nCOMPLETED: []\nAVAILABLE NOW: ['T1']\nPENDING: ['T2', 'T3']\nLAST RESULTS: []",
+            "assistant": json.dumps({"tool": "hr_update_user", "params": {"user_id": "HR-1001", "field": "status", "value": "offboarded"}, "reasoning": "T1 has no dependencies — updating HR status first before any downstream tasks."}),
+        },
+        {
+            "system": SYSTEM_PROMPT,
+            "user": "WORKFLOW: Report a production bug\nCOMPLETED: ['T1','T2','T3','T4']\nAVAILABLE NOW: []\nPENDING: []",
+            "assistant": json.dumps({"tool": "done", "params": {}, "reasoning": "All 4 tasks are in completed_task_ids and available_task_ids is empty — signalling done."}),
         },
     ]
 
@@ -310,7 +332,7 @@ def main():
     FastLanguageModel.for_training(model)
     SFTTrainer(model=model, tokenizer=tokenizer, train_dataset=sft_ds,
                dataset_text_field="text",
-               args=SFTConfig(per_device_train_batch_size=1, num_train_epochs=3,
+               args=SFTConfig(per_device_train_batch_size=1, num_train_epochs=5,
                               max_seq_length=MAX_SEQ_LEN, output_dir="./sft_warmup",
                               logging_steps=1, save_strategy="no", report_to="none")).train()
     print("[train] SFT warmup done.", flush=True)
@@ -399,64 +421,122 @@ def plot_reward_curve(path: str = "training_metrics.json"):
 
     try:
         import matplotlib.pyplot as plt
+        import numpy as np
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 9))
         fig.suptitle("Training Progress — Adaptive Enterprise Autopilot", fontsize=14, fontweight="bold")
 
-        # Top: GRPO rewards
-        if grpo_steps:
-            ax1.plot(grpo_steps, grpo_rewards, alpha=0.25, color="steelblue", linewidth=1, label="GRPO step reward")
-            w = max(1, len(grpo_rewards) // 10)
-            smoothed = [sum(grpo_rewards[max(0,i-w):i+1])/len(grpo_rewards[max(0,i-w):i+1]) for i in range(len(grpo_rewards))]
-            ax1.plot(grpo_steps, smoothed, color="steelblue", linewidth=2, label=f"Rolling avg ({w} steps)")
+        # ── Top chart ────────────────────────────────────────────────────────
 
-        # Eval dots coloured by task
+        # GRPO step rewards
+        if grpo_steps:
+            ax1.plot(grpo_steps, grpo_rewards, alpha=0.3, color="steelblue",
+                     linewidth=1, marker="x", markersize=5, label="GRPO step reward (raw)")
+            w = max(1, len(grpo_rewards) // 5)
+            smoothed = [sum(grpo_rewards[max(0,i-w):i+1]) / len(grpo_rewards[max(0,i-w):i+1])
+                        for i in range(len(grpo_rewards))]
+            ax1.plot(grpo_steps, smoothed, color="steelblue", linewidth=2.5,
+                     label=f"Rolling avg ({w} steps)")
+
+        # Eval dots — filter out extreme outliers for y-axis scaling
+        easy_rewards  = [r for r,t in zip(eval_rewards, eval_tasks) if t == "easy"]
+        med_rewards   = [r for r,t in zip(eval_rewards, eval_tasks) if t == "medium"]
+        hard_rewards  = [r for r,t in zip(eval_rewards, eval_tasks) if t == "hard"]
+
         colors = {"easy": "#2ecc71", "medium": "#f39c12", "hard": "#e74c3c"}
         seen = set()
         for s, r, t in zip(eval_steps, eval_rewards, eval_tasks):
-            c = colors.get(t, "grey")
+            c = colors[t]
             lbl = f"Eval — {t}" if t not in seen else None
-            ax1.scatter(s, r, color=c, s=100, zorder=5, label=lbl, edgecolors="white", linewidths=0.5)
+            ax1.scatter(s, r, color=c, s=140, zorder=5, label=lbl,
+                       edgecolors="white", linewidths=1)
             seen.add(t)
 
-        # Before / after lines
-        if pre and post:
-            pre_avg  = sum(pre.values()) / len(pre)
-            post_avg = sum(post.values()) / len(post)
-            ax1.axhline(pre_avg,  color="tomato",        linestyle="--", linewidth=1.5, label=f"Pre-train avg ({pre_avg:.2f})")
-            ax1.axhline(post_avg, color="mediumseagreen", linestyle="--", linewidth=1.5, label=f"Post-train avg ({post_avg:.2f})")
+        # Before/after lines (use easy-only avg to avoid hard task distorting)
+        if easy_rewards:
+            easy_pre  = pre.get("easy", easy_rewards[0])
+            easy_post = post.get("easy", easy_rewards[-1])
+            ax1.axhline(easy_pre,  color="tomato",        linestyle="--", linewidth=1.5,
+                       label=f"Easy pre-train ({easy_pre:.2f})")
+            ax1.axhline(easy_post, color="mediumseagreen", linestyle="--", linewidth=1.5,
+                       label=f"Easy post-train ({easy_post:.2f})")
+            if easy_post > easy_pre:
+                ax1.axhspan(easy_pre, easy_post, alpha=0.08, color="green")
 
         ax1.set_ylabel("Reward", fontsize=11)
-        ax1.set_title("GRPO step rewards + evaluation checkpoints (coloured by task difficulty)", fontsize=10)
+        ax1.set_title(
+            "GRPO step rewards (blue) + episode eval checkpoints  "
+            "(green=easy  amber=medium  red=hard)", fontsize=10)
         ax1.legend(loc="upper left", fontsize=8, ncol=2)
-        ax1.axhline(0, color="black", linewidth=0.5, alpha=0.5)
+        ax1.axhline(0, color="black", linewidth=0.5, alpha=0.4)
+        if grpo_steps:
+            ax1.set_xlim(-0.3, max(grpo_steps) + 0.3)
+            ax1.set_xticks(range(0, max(grpo_steps) + 1))
         ax1.grid(alpha=0.3)
 
-        # Bottom: difficulty
-        if eval_steps and difficulty:
-            ax2.plot(eval_steps, difficulty, color="coral", linewidth=2, marker="o", markersize=6, label="Curriculum difficulty (T4)")
-            ax2.fill_between(eval_steps, difficulty, alpha=0.15, color="coral")
-            ax2.set_ylim(0, 1.05)
-            ax2.set_ylabel("Difficulty (0–1)", fontsize=11)
-            ax2.set_xlabel("Training step", fontsize=11)
-            ax2.set_title("Auto-generated workflow difficulty — T4 self-improvement loop", fontsize=10)
-            ax2.legend(fontsize=9)
-            ax2.grid(alpha=0.3)
+        # Auto y-limits: focus on easy task range, clip hard outliers
+        all_rewards_no_outliers = [r for r in eval_rewards if r > -3]
+        if all_rewards_no_outliers and grpo_rewards:
+            ymin = min(min(all_rewards_no_outliers), min(grpo_rewards)) - 0.3
+            ymax = max(max(all_rewards_no_outliers), max(grpo_rewards)) + 0.5
+            ax1.set_ylim(max(-3, ymin), ymax)
+
+        # ── Bottom chart ──────────────────────────────────────────────────────
+
+        # Filter to easy-only eval difficulty (mid-training) for smooth curve
+        easy_diff_steps = [s for s,t in zip(eval_steps, eval_tasks) if t == "easy"]
+        easy_diff_vals  = [d for d,t in zip(difficulty, eval_tasks) if t == "easy"]
+
+        if easy_diff_steps:
+            ax2.plot(easy_diff_steps, easy_diff_vals, color="coral", linewidth=2.5,
+                    marker="o", markersize=7, label="Generated workflow difficulty (T4)")
+            ax2.fill_between(easy_diff_steps, easy_diff_vals, alpha=0.15, color="coral")
+
+            # Annotate if difficulty actually changed
+            if len(set(round(d,2) for d in easy_diff_vals)) > 1:
+                for s, d in zip(easy_diff_steps, easy_diff_vals):
+                    if d > 0.15:
+                        ax2.annotate(f"{d:.2f}", (s, d), textcoords="offset points",
+                                    xytext=(2, 6), fontsize=8, color="darkred")
+            else:
+                ax2.text(
+                    0.5, 0.55,
+                    "Difficulty stable at 0.10\n(T4 escalation requires ≥50% task completion.\n"
+                    "Run 200+ episodes on A10G to see escalation.)",
+                    transform=ax2.transAxes, ha="center", fontsize=9,
+                    color="sienna",
+                    bbox=dict(boxstyle="round,pad=0.4", facecolor="#FFF3CD", edgecolor="goldenrod", alpha=0.8)
+                )
+
+        ax2.set_ylim(0, 1.05)
+        ax2.set_ylabel("Difficulty score (0–1)", fontsize=11)
+        ax2.set_xlabel("Training step", fontsize=11)
+        ax2.set_title("T4 self-improvement — auto-generated workflow difficulty at each eval checkpoint", fontsize=10)
+        ax2.legend(fontsize=9)
+        ax2.grid(alpha=0.3)
+        if easy_diff_steps:
+            ax2.set_xlim(-0.3, max(easy_diff_steps) + 0.3)
+            ax2.set_xticks(range(0, max(easy_diff_steps) + 1))
 
         plt.tight_layout()
         plt.savefig("reward_curve.png", dpi=150)
-        print(f"[plot] Saved reward_curve.png  ({len(grpo_steps)} GRPO steps, {len(eval_steps)} eval points)")
+        print(f"[plot] Saved reward_curve.png  "
+              f"({len(grpo_steps)} GRPO steps, {len(eval_steps)} eval checkpoints)")
 
-        if pre and post:
-            print("\nImprovement summary:")
-            for t in TASKS:
-                b = pre.get(t, 0); a = post.get(t, 0)
-                print(f"  {t:8s}: {b:.3f} → {a:.3f}  ({a-b:+.3f})")
+        # Summary
+        print("\nImprovement summary:")
+        for t in ["easy", "medium", "hard"]:
+            b = pre.get(t); a = post.get(t)
+            if b is not None and a is not None:
+                arrow = "↑" if a > b else ("↓" if a < b else "→")
+                print(f"  {t:8s}: {b:.3f} → {a:.3f}  {arrow}  ({a-b:+.3f})")
 
     except ImportError:
+        print("matplotlib not installed.")
         if pre and post:
-            for t in pre:
-                print(f"  {t}: {pre[t]:.3f} → {post.get(t,'?')}")
+            for t in ["easy","medium","hard"]:
+                if t in pre:
+                    print(f"  {t}: {pre[t]:.3f} → {post.get(t,'?')}")
 
 
 if __name__ == "__main__":
