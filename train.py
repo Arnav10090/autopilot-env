@@ -67,6 +67,10 @@ MAX_STEPS_EP = 15   # capped at 15 to avoid runaway negative rewards on hard tas
 GRPO_K       = 4
 EVAL_SCORE_MIN = -2.75
 EVAL_SCORE_MAX = 2.0
+USE_LEARNED_JUDGE = os.getenv("USE_LEARNED_JUDGE", "0") == "1"
+JUDGE_ALPHA = float(os.getenv("JUDGE_ALPHA", "0.05"))
+JUDGE_LOG_PATH = os.getenv("JUDGE_LOG_PATH", "judge_examples.jsonl")
+JUDGE_MODEL_PATH = os.getenv("JUDGE_MODEL_PATH", "")
 
 SYSTEM_PROMPT = textwrap.dedent("""
 You are an expert enterprise workflow orchestration agent.
@@ -467,12 +471,25 @@ def _blocked_task_matches(state: Dict[str, Any], tool: str) -> List[Dict[str, An
     ]
 
 
-def run_episode(model_fn, task: str, env=None) -> Dict[str, Any]:
+def run_episode(
+    model_fn,
+    task: str,
+    env=None,
+    judge_buffer=None,
+    learned_judge=None,
+    judge_enabled: bool = False,
+) -> Dict[str, Any]:
     sys.path.insert(0, "src")
     from envs.autopilot_env.environment import AutopilotEnvironment
     from envs.autopilot_env.models import AutopilotAction
 
-    env = env or AutopilotEnvironment(task=task)
+    env = env or AutopilotEnvironment(
+        task=task,
+        learned_judge=learned_judge,
+        judge_alpha=JUDGE_ALPHA,
+        judge_enabled=judge_enabled,
+        judge_buffer=judge_buffer,
+    )
     obs = env.reset()
     total = 0.0
     steps = 0
@@ -636,8 +653,21 @@ def make_callback(get_model_fn):
                             if persistent_easy_env is None:
                                 sys.path.insert(0, "src")
                                 from envs.autopilot_env.environment import AutopilotEnvironment
-                                persistent_easy_env = AutopilotEnvironment(task="easy")
-                            r = run_episode(fn, "easy", env=persistent_easy_env)
+                                persistent_easy_env = AutopilotEnvironment(
+                                    task="easy",
+                                    learned_judge=getattr(make_callback, "_learned_judge", None),
+                                    judge_alpha=JUDGE_ALPHA,
+                                    judge_enabled=getattr(make_callback, "_judge_enabled", False),
+                                    judge_buffer=getattr(make_callback, "_judge_buffer", None),
+                                )
+                            r = run_episode(
+                                fn,
+                                "easy",
+                                env=persistent_easy_env,
+                                judge_buffer=getattr(make_callback, "_judge_buffer", None),
+                                learned_judge=getattr(make_callback, "_learned_judge", None),
+                                judge_enabled=getattr(make_callback, "_judge_enabled", False),
+                            )
                             metrics.record_eval(state.global_step, "easy",
                                                 r["total_reward"], r["difficulty"],
                                                 phase="train")
@@ -726,10 +756,29 @@ def main():
         FastLanguageModel.for_training(model)
         return tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
 
+    judge_buffer = None
+    learned_judge = None
+    if USE_LEARNED_JUDGE:
+        sys.path.insert(0, "src")
+        from envs.autopilot_env.judge_buffer import JudgeReplayBuffer
+        from envs.autopilot_env.judge_model import LearnedJudge
+
+        judge_buffer = JudgeReplayBuffer()
+        learned_judge = LearnedJudge(
+            model_path=JUDGE_MODEL_PATH,
+            enabled=True,
+        ).load()
+
     # Phase 0 — baseline
     print("\n[train] === PHASE 0: Pre-training baseline ===", flush=True)
     for task in TASKS:
-        r = run_episode(model_fn, task)
+        r = run_episode(
+            model_fn,
+            task,
+            judge_buffer=judge_buffer,
+            learned_judge=learned_judge,
+            judge_enabled=USE_LEARNED_JUDGE,
+        )
         metrics.pre_train_rewards[task] = r["total_reward"]
         metrics.record_eval(0, task, r["total_reward"], r["difficulty"], phase="pre")
 
@@ -796,6 +845,9 @@ def main():
     elif "kl_coeff" in grpo_config_params:
         grpo_kwargs["kl_coeff"] = 0.02
 
+    make_callback._judge_buffer = judge_buffer
+    make_callback._learned_judge = learned_judge
+    make_callback._judge_enabled = USE_LEARNED_JUDGE
     callback = make_callback(lambda: model_fn)
     GRPOTrainer(
         model=model, tokenizer=tokenizer,
@@ -811,7 +863,13 @@ def main():
     FastLanguageModel.for_inference(model)
     final_step = metrics._step
     for task in TASKS:
-        r = run_episode(model_fn, task)
+        r = run_episode(
+            model_fn,
+            task,
+            judge_buffer=judge_buffer,
+            learned_judge=learned_judge,
+            judge_enabled=USE_LEARNED_JUDGE,
+        )
         metrics.post_train_rewards[task] = r["total_reward"]
         metrics.record_eval(final_step, task, r["total_reward"], r["difficulty"], phase="post")
 
@@ -820,6 +878,10 @@ def main():
         b = metrics.pre_train_rewards.get(task, 0)
         a = metrics.post_train_rewards.get(task, 0)
         print(f"  {task:8s}: {b:.3f} → {a:.3f}  ({a-b:+.3f})")
+
+    if judge_buffer is not None and judge_buffer.size() > 0:
+        judge_buffer.flush_jsonl(JUDGE_LOG_PATH)
+        print(f"[judge] Saved examples -> {JUDGE_LOG_PATH}", flush=True)
 
     metrics.save("training_metrics.json")
     model.save_pretrained("./trained_adapter")

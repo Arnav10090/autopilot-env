@@ -16,6 +16,8 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from .grader import grade_step, grade_episode, resolve_task
+from .judge_features import build_judge_input
+from .judge_types import JudgeExample
 from .models import AutopilotAction, AutopilotObservation, AutopilotState
 from .tools import MockToolRegistry
 from .workflow_gen import generate_harder_workflow, generate_easier_workflow, difficulty_score
@@ -29,7 +31,14 @@ class AutopilotEnvironment:
 
     VALID_TASKS = ("easy", "medium", "hard")
 
-    def __init__(self, task: str = "easy"):
+    def __init__(
+        self,
+        task: str = "easy",
+        learned_judge=None,
+        judge_alpha: float = 0.05,
+        judge_enabled: bool = False,
+        judge_buffer=None,
+    ):
         if task not in self.VALID_TASKS:
             raise ValueError(f"task must be one of {self.VALID_TASKS}, got {task!r}")
 
@@ -45,6 +54,11 @@ class AutopilotEnvironment:
         self._tool_history: List[Dict] = []
         self._episode_started: bool = False
         self._workflow_index: int = 0
+        self._learned_judge = learned_judge
+        self._judge_alpha = float(judge_alpha)
+        self._judge_enabled = bool(judge_enabled)
+        self._judge_buffer = judge_buffer
+        self._current_episode_judge_examples: List[JudgeExample] = []
 
     # ── OpenEnv API ───────────────────────────────────────────────────────────
 
@@ -60,6 +74,7 @@ class AutopilotEnvironment:
         self._completed_ids = []
         self._attempted_blocker_ids = set()
         self._tool_history = []
+        self._current_episode_judge_examples = []
         self._episode_started = True
 
         self._state = AutopilotState(
@@ -109,12 +124,36 @@ class AutopilotEnvironment:
             self._completed_ids,
             self._tools.summary(),
         )
+        judge_input = None
+        judge_prediction = None
+        judge_score = 0.0
+
+        available_ids = self._available_task_ids()
+        pending_ids = self._pending_task_ids()
+
+        if self._judge_enabled and self._learned_judge is not None:
+            judge_input = build_judge_input(
+                workflow=self._workflow,
+                completed_ids=self._completed_ids,
+                available_ids=available_ids,
+                pending_ids=pending_ids,
+                tool_summary=self._tools.summary(),
+                tool_history=self._tool_history,
+                action=action,
+            )
+            judge_prediction = self._learned_judge.score(judge_input)
+            judge_score = float(judge_prediction.score)
 
         # Track violations for episode penalty
         if breakdown.get("dep_violation", 0) < 0:
             self._state.dependency_violations += 1
         if breakdown.get("rule_violation", 0) < 0:
             self._state.rule_violations += 1
+
+        breakdown["learned_judge_score"] = round(judge_score, 4)
+        if judge_prediction is not None:
+            breakdown["learned_judge_components"] = dict(judge_prediction.components)
+            breakdown["learned_judge_confidence"] = round(judge_prediction.confidence, 4)
 
         # ── Execute tool call (if valid) ──────────────────────────────
         if action.tool and action.tool != "done":
@@ -152,11 +191,34 @@ class AutopilotEnvironment:
                 self._state.rule_violations,
             )
             breakdown["episode_bonus"] = ep_breakdown
+            completion_rate = (
+                len(self._completed_ids) / len(self._workflow["tasks"])
+                if self._workflow["tasks"] else 0.0
+            )
+            episode_success = 1.0 if all_done else 0.0
+            for example in self._current_episode_judge_examples:
+                example.episode_success = episode_success
+                example.completion_rate = completion_rate
+                if self._judge_buffer is not None:
+                    self._judge_buffer.add(example)
+            self._current_episode_judge_examples = []
             # T4: generate harder workflow for next time
             self._run_self_improvement()
 
-        total_step_reward = round(step_reward + episode_bonus, 4)
+        total_step_reward = round(
+            step_reward + episode_bonus + (self._judge_alpha * judge_score),
+            4,
+        )
         self._state.total_reward += total_step_reward
+
+        if judge_input is not None:
+            self._current_episode_judge_examples.append(JudgeExample(
+                judge_input=judge_input,
+                deterministic_step_reward=float(step_reward),
+                deterministic_breakdown=dict(breakdown),
+                episode_success=0.0,
+                completion_rate=0.0,
+            ))
 
         feedback = self._build_feedback(action, breakdown, tool_result, done)
         obs = self._make_observation(
@@ -280,6 +342,13 @@ class AutopilotEnvironment:
                 "tasks_completed": self._state.tasks_completed,
                 "tasks_total": self._state.tasks_total,
                 "tool_summary": self._tools.summary(),
+                "judge_enabled": self._judge_enabled,
+                "judge_alpha": self._judge_alpha,
+                "judge_model_loaded": bool(
+                    self._learned_judge is not None
+                    and hasattr(self._learned_judge, "enabled")
+                    and self._learned_judge.enabled()
+                ),
             },
         )
 

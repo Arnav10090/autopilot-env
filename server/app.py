@@ -24,9 +24,13 @@ import uvicorn
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from envs.autopilot_env.environment import AutopilotEnvironment
+from envs.autopilot_env.judge_model import LearnedJudge
 from envs.autopilot_env.models import AutopilotAction
 
 DEFAULT_TASK = os.getenv("AUTOPILOT_TASK", "easy")
+JUDGE_ENABLED = os.getenv("JUDGE_ENABLED", "0") == "1"
+JUDGE_MODEL_PATH = os.getenv("JUDGE_MODEL_PATH", "")
+JUDGE_ALPHA = float(os.getenv("JUDGE_ALPHA", "0.05"))
 
 app = FastAPI(
     title="Adaptive Enterprise Autopilot — OpenEnv",
@@ -47,6 +51,9 @@ app.add_middleware(
 
 _env: Optional[AutopilotEnvironment] = None
 _current_task: str = DEFAULT_TASK
+_judge: Optional[LearnedJudge] = None
+if JUDGE_ENABLED:
+    _judge = LearnedJudge(model_path=JUDGE_MODEL_PATH, enabled=True).load()
 
 
 # ── Request / Response Schemas ────────────────────────────────────────────────
@@ -156,7 +163,13 @@ def reset(task: Optional[str] = Query(default=None)):
     if chosen not in ("easy", "medium", "hard"):
         raise HTTPException(400, f"Invalid task {chosen!r}. Use easy, medium, or hard.")
     _current_task = chosen
-    _env = AutopilotEnvironment(task=chosen)
+    _env = AutopilotEnvironment(
+        task=chosen,
+        learned_judge=_judge if JUDGE_ENABLED else None,
+        judge_alpha=JUDGE_ALPHA,
+        judge_enabled=JUDGE_ENABLED,
+        judge_buffer=None,
+    )
     obs = _env.reset()
     return _obs_to_dict(obs)
 
