@@ -1054,6 +1054,24 @@ const STORY = {
     body:'Both blockers detected, both retried. Reward function gives <b>−0.05</b> per failed call but full <b>+0.50</b> on retry — net positive only when the agent actually recognises the failure pattern.',
     border:'green-border', step:5,
   },
+  pbrsInvariant: {
+    phase:'REWARD ENGINEERING · POLICY INVARIANCE',
+    title:'SHAPING THAT PROVABLY DOESN\'T HURT',
+    body:'Every step adds <b>F = γ·Φ(s′) − Φ(s)</b> to the deterministic reward. By the Ng–Harada–Russell theorem the optimal policy is unchanged — and we ship a <b>3-state MDP unit test</b> that proves it numerically.',
+    border:'green-border', step:3,
+  },
+  intrinsicNovel: {
+    phase:'EXPLORATION · COUNT-BASED NOVELTY',
+    title:'A BONUS THAT DECAYS BY DESIGN',
+    body:'Visiting (workflow, completed-set, tool) for the first time pays <b>β / √(N+1)</b>. The bonus decays linearly to <b>0 by episode 200</b> — at convergence the agent is paid only by the deterministic grader.',
+    border:'purple-border', step:4,
+  },
+  ablationProof: {
+    phase:'EVIDENCE · ABLATION CHART',
+    title:'EVERY TERM EARNS ITS PLACE',
+    body:'<b>proxy-only</b> vs <b>+PBRS</b> vs <b>+intrinsic</b> vs <b>full stack</b>. The bar chart in the README proves each addition contributes — anything that didn\'t was removed before submission.',
+    border:'green-border', step:5,
+  },
 };
 
 let curStoryStep = 0;
@@ -1123,6 +1141,21 @@ function renderStackCanvas() {
     runningTotal += f.extr + f.pbrs + f.intr;
   }
   document.getElementById('stack-total').textContent = (runningTotal>=0?'+':'') + runningTotal.toFixed(2);
+}
+
+let _firedPbrsCard = false;
+let _firedIntrCard = false;
+
+function fireConditionalStories(diag) {
+  if (!diag || !diag.last_step) return;
+  if (!_firedPbrsCard && Math.abs(diag.last_step.pbrs_shaping) > 1e-4) {
+    _firedPbrsCard = true;
+    triggerStory('pbrsInvariant');
+  }
+  if (!_firedIntrCard && diag.last_step.intrinsic_count > 1e-4) {
+    _firedIntrCard = true;
+    setTimeout(() => triggerStory('intrinsicNovel'), 1500);
+  }
 }
 
 function triggerStory(key) {
@@ -1230,6 +1263,8 @@ function resetAll() {
   document.getElementById('log-body').innerHTML = '<div class="le info"><span class="le-ts">00:00</span><span class="le-ic">◈</span><span class="le-tx">Reset complete. System ready.</span></div>';
   document.getElementById('bd-section').classList.remove('show');
   resetJudgeUi();
+  _firedPbrsCard = false;
+  _firedIntrCard = false;
   enBtns();
   triggerStory('intro');
 }
@@ -1293,6 +1328,7 @@ async function runDemo(mode) {
     }
     const diag = await fetchDiagnostics();
     pushStackFrame(diag);
+    fireConditionalStories(diag);
 
     const rew = res.reward ?? 0;
     const newObs = res.observation ?? obs;
@@ -1671,8 +1707,7 @@ function showEp(rew, diff) {
 }
 function closeEp() {
   document.getElementById('ep-ov').classList.remove('show');
-  // After closing, surface the next-phase story card if not already
-  if (curStoryStep < 5) setTimeout(() => triggerStory('curriculumNext'), 250);
+  setTimeout(() => triggerStory('ablationProof'), 350);
 }
 function setText(id, t) { const el = document.getElementById(id); if (el) el.textContent = t; }
 function setDeltaCell(id, nv, ov) {
