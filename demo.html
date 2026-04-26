@@ -744,6 +744,45 @@ input[type=range]::-webkit-slider-thumb{
   width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:4px;vertical-align:middle;
 }
 
+/* Sample complexity tile */
+.sc-tile{
+  display:none;padding:8px 16px;border-bottom:1px solid var(--b1);
+  background:linear-gradient(180deg,rgba(0,230,118,.04),transparent);
+}
+.sc-tile.show{display:block;animation:bdIn .25s ease}
+.sc-tile-hdr{
+  display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:6px;
+}
+.sc-tile-lbl{
+  font-family:var(--font-mono);font-size:8px;letter-spacing:2px;color:var(--t3);
+}
+.sc-tile-badge{
+  font-family:var(--font-mono);font-size:7.5px;font-weight:700;letter-spacing:1px;
+  padding:3px 8px;border-radius:999px;
+  color:var(--green);border:1px solid rgba(0,230,118,.3);
+  background:rgba(0,230,118,.08);
+}
+.sc-tile-badge.unavail{
+  color:var(--t3);border-color:var(--b2);background:rgba(24,32,53,.5);
+}
+.sc-tile-grid{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:5px;
+}
+.sc-tile-cell{
+  background:var(--bg);border:1px solid var(--b1);border-radius:5px;
+  padding:6px 5px;text-align:center;
+}
+.sc-tile-cell .sc-k{
+  font-family:var(--font-mono);font-size:6.5px;letter-spacing:1px;
+  color:var(--t3);margin-bottom:3px;
+}
+.sc-tile-cell .sc-v{
+  font-family:var(--font-mono);font-size:12px;font-weight:700;color:var(--t1);
+}
+.sc-tile-cell .sc-v.hi{color:var(--green)}
+.sc-tile-cell .sc-v.dim{color:var(--t3);opacity:.45}
+
 /* ═══════════════════════════════════════════════════
    CHAOS DAG NODE STYLE
 ═══════════════════════════════════════════════════ */
@@ -933,6 +972,31 @@ input[type=range]::-webkit-slider-thumb{
         <span class="leg"><span class="sl-dot" style="background:#FFC400"></span>JUDGE</span>
         <span class="leg"><span class="sl-dot" style="background:#FF5ACD"></span>DIFF</span>
         <span class="leg"><span class="sl-dot" style="background:#FF6B6B"></span>IRD</span>
+      </div>
+    </div>
+
+    <div class="sc-tile" id="sc-tile">
+      <div class="sc-tile-hdr">
+        <span class="sc-tile-lbl">SAMPLE COMPLEXITY · TRAINING METRICS</span>
+        <span class="sc-tile-badge unavail" id="sc-tile-badge">NO DATA</span>
+      </div>
+      <div class="sc-tile-grid">
+        <div class="sc-tile-cell">
+          <div class="sc-k">EPISODES → 0.5</div>
+          <div class="sc-v dim" id="sc-ep05">—</div>
+        </div>
+        <div class="sc-tile-cell">
+          <div class="sc-k">EPISODES → 1.0</div>
+          <div class="sc-v dim" id="sc-ep10">—</div>
+        </div>
+        <div class="sc-tile-cell">
+          <div class="sc-k">GRPO STEPS</div>
+          <div class="sc-v dim" id="sc-grpo">—</div>
+        </div>
+        <div class="sc-tile-cell">
+          <div class="sc-k">EVAL EPISODES</div>
+          <div class="sc-v dim" id="sc-evals">—</div>
+        </div>
       </div>
     </div>
 
@@ -1469,6 +1533,8 @@ async function fetchDiagnostics() {
 }
 
 // ── INIT ────────────────────────────────────────────────────────────────
+let _trainingMetrics = null;
+
 async function init() {
   previewExtrMax(curTask);
   try {
@@ -1480,6 +1546,75 @@ async function init() {
     setLive('err','OFFLINE');
     addLog('er','✗','Cannot reach API. Ensure the HuggingFace Space is running.');
   }
+  // Fetch training metrics for sample complexity tile
+  fetchTrainingMetrics();
+}
+
+async function fetchTrainingMetrics() {
+  try {
+    const r = await fetch(`${API}/metrics`);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!data.available) {
+      showSampleComplexityTile(null);
+      return;
+    }
+    _trainingMetrics = data;
+    showSampleComplexityTile(data);
+    updateSampleComplexityStoryCard(data);
+  } catch {
+    showSampleComplexityTile(null);
+  }
+}
+
+function showSampleComplexityTile(data) {
+  const tile = document.getElementById('sc-tile');
+  const badge = document.getElementById('sc-tile-badge');
+  if (!tile) return;
+  tile.classList.add('show');
+
+  if (!data) {
+    badge.textContent = 'NO DATA';
+    badge.className = 'sc-tile-badge unavail';
+    return;
+  }
+
+  badge.textContent = 'LOADED';
+  badge.className = 'sc-tile-badge';
+
+  const ep05 = data.episodes_to_threshold_0_5;
+  const ep10 = data.episodes_to_threshold_1_0;
+  setScValue('sc-ep05', ep05 >= 0 ? String(ep05) : 'N/R', ep05 >= 0);
+  setScValue('sc-ep10', ep10 >= 0 ? String(ep10) : 'N/R', ep10 >= 0);
+  setScValue('sc-grpo', data.total_grpo_steps > 0 ? String(data.total_grpo_steps) : '—', data.total_grpo_steps > 0);
+  setScValue('sc-evals', data.total_eval_episodes > 0 ? String(data.total_eval_episodes) : '—', data.total_eval_episodes > 0);
+}
+
+function setScValue(id, text, highlight) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = `sc-v${highlight ? ' hi' : ' dim'}`;
+}
+
+function updateSampleComplexityStoryCard(data) {
+  if (!data) return;
+  const card = STORY.sampleComplexity;
+  if (!card) return;
+  const ep05 = data.episodes_to_threshold_0_5;
+  const ep10 = data.episodes_to_threshold_1_0;
+  let body = 'We track <b>episodes to reward thresholds</b> so judges can see not just final score, but how quickly the stack reaches useful behavior.';
+  if (ep05 >= 0) {
+    body += ` The agent crossed <b>reward ≥ 0.5 in ${ep05} episodes</b>.`;
+  }
+  if (ep10 >= 0) {
+    body += ` It reached <b>reward ≥ 1.0 in ${ep10} episodes</b>.`;
+  }
+  if (ep05 < 0 && ep10 < 0) {
+    body += ' Threshold data not yet recorded — run training to populate.';
+  }
+  body += ' Faster threshold crossing means lower sample complexity and less wasted training.';
+  card.body = body;
 }
 function setLive(cls, txt) {
   document.getElementById('live-dot').className = `live-dot ${cls}`;

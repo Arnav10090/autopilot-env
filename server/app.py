@@ -11,6 +11,7 @@ Endpoints:
 """
 
 from __future__ import annotations
+import json
 import os
 import sys
 from pathlib import Path
@@ -296,6 +297,39 @@ def diagnostics_set_mode(payload: dict):
         return {"ok": False, "error": f"unknown mode: {new_mode}"}
     combiner.mode = new_mode
     return {"ok": True, "mode": new_mode}
+
+
+@app.get("/metrics")
+def metrics():
+    """
+    Serve training metrics (sample complexity, reward components) if the
+    metrics file exists. Returns graceful fallback when absent.
+    """
+    candidates = [
+        Path(__file__).resolve().parents[1] / "training_metrics.json",
+        Path("training_metrics.json"),
+    ]
+    for path in candidates:
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return {
+                    "available": True,
+                    "episodes_to_threshold_0_5": data.get("episodes_to_threshold_0_5", -1),
+                    "episodes_to_threshold_1_0": data.get("episodes_to_threshold_1_0", -1),
+                    "pre_train_rewards": data.get("pre_train_rewards", {}),
+                    "post_train_rewards": data.get("post_train_rewards", {}),
+                    "reward_component_summary": data.get("reward_component_summary", {}),
+                    "total_eval_episodes": len(data.get("eval_rewards", [])),
+                    "total_grpo_steps": len(data.get("grpo_steps", [])),
+                }
+            except Exception:
+                pass
+    return {
+        "available": False,
+        "episodes_to_threshold_0_5": -1,
+        "episodes_to_threshold_1_0": -1,
+    }
 
 
 def main():
