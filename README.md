@@ -32,6 +32,19 @@ Round 1 submission: [Customer Support Triage](https://huggingface.co/spaces/Arna
 
 ---
 
+## 📋 Submission Materials
+
+| Material | Link |
+|----------|------|
+| 🤗 **Live Demo (HF Space)** | [Adaptive Enterprise Autopilot](https://huggingface.co/spaces/Arnav100904/adaptive-enterprise-autopilot) |
+| 📝 **Writeup (HF Blog)** | `[INSERT_YOUR_PUBLISHED_BLOG_URL_HERE]` |
+| 📹 **Video Walkthrough** | `[INSERT_YOUR_YOUTUBE_URL_HERE]` |
+| 📓 **Training Notebook** | [train_colab.ipynb](train_colab.ipynb) *(Includes Unsloth/TRL setup)* |
+| 📄 **Reward Engineering Docs**| [docs/REWARD_ENGINEERING.md](docs/REWARD_ENGINEERING.md) |
+| 📊 **Training Evidence** | [reward_curve.png](reward_curve.png) · [ablation_curve.png](ablation_curve.png) |
+
+---
+
 ## The Problem
 
 Most AI agents can follow a 3-step script. But real enterprise work looks nothing like that.
