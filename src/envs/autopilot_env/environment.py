@@ -19,7 +19,7 @@ from .grader import grade_step, grade_episode, resolve_task
 from .difference_rewards import compute_difference_reward
 from .ird import IRDPosterior
 from .pbrs import potential as pbrs_potential, shaping_term, GAMMA as PBRS_GAMMA, PBRS_WEIGHT
-from .intrinsic import IntrinsicCounter, INTRINSIC_WEIGHT
+from .intrinsic import IntrinsicCounter
 from .reward_combiner import RewardCombiner, RewardComponents
 from .judge_features import build_judge_input
 from .judge_types import JudgeExample
@@ -251,9 +251,10 @@ class AutopilotEnvironment:
             episode_success=all_done,
         )
 
-        intrinsic_term = self._intrinsic.bonus(
+        intrinsic_terms = self._intrinsic.components(
             workflow_id=self._workflow.get("workflow_id", ""),
             completed_ids=list(self._completed_ids),
+            available_ids=self._available_task_ids(),
             tool=action.tool or "",
         )
 
@@ -261,7 +262,8 @@ class AutopilotEnvironment:
         components = RewardComponents(
             extrinsic=extrinsic_total,
             pbrs_shaping=pbrs_term,
-            intrinsic_count=intrinsic_term,
+            intrinsic_count=intrinsic_terms.count_bonus,
+            intrinsic_rnd=intrinsic_terms.rnd_bonus,
             difference_reward=difference_raw,
             ird_posterior_correction=ird_term,
         )
@@ -279,11 +281,12 @@ class AutopilotEnvironment:
         breakdown["ird_posterior_expected_reward"] = ird_meta["posterior_expected_reward"]
         breakdown["ird_top_hypothesis"] = ird_meta["top_hypothesis"]
         breakdown["ird_posterior"] = dict(ird_meta["posterior"])
+        breakdown["intrinsic_rnd_error"] = intrinsic_terms.rnd_error
         breakdown["extrinsic_step"] = round(step_reward, 4)
         breakdown["extrinsic_total"] = round(extrinsic_total, 4)
         breakdown["phi_before"] = round(phi_before, 4)
         breakdown["phi_after"] = round(phi_after, 4)
-        breakdown["intrinsic_decay_factor"] = round(self._intrinsic.decay_factor(), 4)
+        breakdown["intrinsic_decay_factor"] = intrinsic_terms.decay_factor
         breakdown["intrinsic_episode_idx"] = self._intrinsic.episode_idx
         breakdown["reward_combiner_mode"] = self._reward_combiner.mode
 
