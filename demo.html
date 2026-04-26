@@ -871,6 +871,9 @@ input[type=range]::-webkit-slider-thumb{
         <span class="leg"><span class="sl-dot" style="background:#00E5FF"></span>EXTRINSIC</span>
         <span class="leg"><span class="sl-dot" style="background:#00E676"></span>PBRS</span>
         <span class="leg"><span class="sl-dot" style="background:#B04DFF"></span>INTRINSIC</span>
+        <span class="leg"><span class="sl-dot" style="background:#FFC400"></span>JUDGE</span>
+        <span class="leg"><span class="sl-dot" style="background:#FF5ACD"></span>DIFF</span>
+        <span class="leg"><span class="sl-dot" style="background:#FF6B6B"></span>IRD</span>
       </div>
     </div>
 
@@ -1123,16 +1126,19 @@ const STORY = {
 };
 
 let curStoryStep = 0;
-let stackHistory = [];   // array of {extr, pbrs, intr} per step
+let stackHistory = [];   // array of {extr, pbrs, intr, judge, diff, ird} per step
 
 function pushStackFrame(diag) {
   if (!diag || !diag.last_step) {
-    stackHistory.push({extr: 0, pbrs: 0, intr: 0});
+    stackHistory.push({extr: 0, pbrs: 0, intr: 0, judge: 0, diff: 0, ird: 0});
   } else {
     stackHistory.push({
       extr: Number(diag.last_step.extrinsic_total || 0),
       pbrs: Number(diag.last_step.pbrs_shaping    || 0),
-      intr: Number(diag.last_step.intrinsic_count || 0),
+      intr: Number(diag.last_step.intrinsic_count || 0) + Number(diag.last_step.intrinsic_rnd || 0),
+      judge: Number(diag.last_step.weighted_judge || 0),
+      diff: Number(diag.last_step.difference_reward || 0),
+      ird: Number(diag.last_step.ird_posterior_correction || 0),
     });
   }
   renderStackCanvas();
@@ -1153,9 +1159,14 @@ function renderStackCanvas() {
   const n = stackHistory.length;
   const colW = Math.max(2, Math.min(28, cssW / n));
   let maxAbs = 0.5;
+  const stackKeys = ['extr', 'pbrs', 'intr', 'judge', 'diff', 'ird'];
   for (const f of stackHistory) {
-    const pos = Math.max(0, f.extr) + Math.max(0, f.pbrs) + Math.max(0, f.intr);
-    const neg = Math.min(0, f.extr) + Math.min(0, f.pbrs) + Math.min(0, f.intr);
+    let pos = 0;
+    let neg = 0;
+    for (const k of stackKeys) {
+      pos += Math.max(0, f[k] || 0);
+      neg += Math.min(0, f[k] || 0);
+    }
     maxAbs = Math.max(maxAbs, pos, -neg);
   }
   const mid = cssH / 2;
@@ -1164,13 +1175,20 @@ function renderStackCanvas() {
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(cssW, mid); ctx.stroke();
 
-  const colors = { extr: '#00E5FF', pbrs: '#00E676', intr: '#B04DFF' };
-  let runningTotal = 0;
+  const colors = {
+    extr: '#00E5FF',
+    pbrs: '#00E676',
+    intr: '#B04DFF',
+    judge: '#FFC400',
+    diff: '#FF5ACD',
+    ird: '#FF6B6B',
+  };
+  let lastFrameTotal = 0;
   for (let i = 0; i < n; i++) {
     const f = stackHistory[i];
     const x = i * colW;
     let yPos = mid, yNeg = mid;
-    for (const k of ['extr', 'pbrs', 'intr']) {
+    for (const k of stackKeys) {
       const v = f[k];
       if (v >= 0) {
         const h = v * scale;
@@ -1186,9 +1204,9 @@ function renderStackCanvas() {
         yNeg += h;
       }
     }
-    runningTotal += f.extr + f.pbrs + f.intr;
+    lastFrameTotal = stackKeys.reduce((sum, key) => sum + Number(f[key] || 0), 0);
   }
-  document.getElementById('stack-total').textContent = (runningTotal>=0?'+':'') + runningTotal.toFixed(2);
+  document.getElementById('stack-total').textContent = (lastFrameTotal>=0?'+':'') + lastFrameTotal.toFixed(2);
 }
 
 let _firedPbrsCard = false;
