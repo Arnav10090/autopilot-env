@@ -263,7 +263,11 @@ def diagnostics():
                 "total",
                 last.get("extrinsic_total", 0.0)
                 + last.get("pbrs_shaping", 0.0)
-                + last.get("intrinsic_count", 0.0),
+                + last.get("intrinsic_count", 0.0)
+                + last.get("intrinsic_rnd", 0.0)
+                + last.get("weighted_judge", 0.0)
+                + last.get("difference_reward", 0.0)
+                + last.get("ird_posterior_correction", 0.0),
             ),
         },
         "config": {

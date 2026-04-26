@@ -666,7 +666,7 @@ input[type=range]::-webkit-slider-thumb{
 .bd-cell.neg .bd-v{color:var(--red)}
 .bd-cell.tot .bd-v{color:var(--gold)}
 .bd-grid-v2{
-  grid-template-columns:repeat(4,1fr);margin-top:5px;
+  grid-template-columns:repeat(6,1fr);margin-top:5px;
 }
 .bd-grid-v2.legacy{opacity:.35;pointer-events:none}
 .stack-section{
@@ -916,8 +916,10 @@ input[type=range]::-webkit-slider-thumb{
       </div>
       <div class="bd-grid bd-grid-v2" id="bd-grid-v2">
         <div class="bd-cell dim" id="bd-pbrs"><div class="bd-k">PBRS γΦ′−Φ</div><div class="bd-v">0.00</div></div>
-        <div class="bd-cell dim" id="bd-intr"><div class="bd-k">INTR β/√N</div><div class="bd-v">0.00</div></div>
-        <div class="bd-cell dim" id="bd-decay"><div class="bd-k">DECAY</div><div class="bd-v">1.00</div></div>
+        <div class="bd-cell dim" id="bd-intr"><div class="bd-k">INTR COUNT+RND</div><div class="bd-v">0.00</div></div>
+        <div class="bd-cell dim" id="bd-judge"><div class="bd-k">JUDGE</div><div class="bd-v">0.00</div></div>
+        <div class="bd-cell dim" id="bd-diff"><div class="bd-k">DIFF</div><div class="bd-v">0.00</div></div>
+        <div class="bd-cell dim" id="bd-ird"><div class="bd-k">IRD</div><div class="bd-v">0.00</div></div>
         <div class="bd-cell tot" id="bd-tot"><div class="bd-k">TOTAL Σ</div><div class="bd-v">+0.00</div></div>
       </div>
     </div>
@@ -1861,28 +1863,37 @@ function renderBreakdown(breakdown, stepReward, diag) {
   const extrCell = document.getElementById('bd-extr');
   extrCell.querySelector('.bd-v').textContent = (extr>=0?'+':'') + extr.toFixed(2);
 
-  // v2 stack (PBRS + intrinsic + decay + total) — pulled from /diagnostics
+  // v2 stack row 2 (PBRS + intrinsic + judge + diff + IRD + total)
   const v2 = document.getElementById('bd-grid-v2');
   if (diag && diag.last_step) {
     v2.classList.remove('legacy');
     setBdCell('bd-pbrs', diag.last_step.pbrs_shaping || 0);
-    setBdCell('bd-intr', diag.last_step.intrinsic_count || 0);
-    const decayCell = document.getElementById('bd-decay');
-    const decayVal = diag.last_step.intrinsic_decay_factor ?? 1.0;
-    decayCell.classList.remove('pos','neg','dim');
-    if (decayVal < 0.05) decayCell.classList.add('dim');
-    decayCell.querySelector('.bd-v').textContent = decayVal.toFixed(2);
+    setBdCell(
+      'bd-intr',
+      Number(diag.last_step.intrinsic_count || 0) + Number(diag.last_step.intrinsic_rnd || 0)
+    );
+    setBdCell('bd-judge', Number(diag.last_step.weighted_judge || 0));
+    setBdCell('bd-diff', Number(diag.last_step.difference_reward || 0));
+    setBdCell('bd-ird', Number(diag.last_step.ird_posterior_correction || 0));
   } else {
     v2.classList.add('legacy');
+    setBdCell('bd-pbrs', 0);
+    setBdCell('bd-intr', 0);
+    setBdCell('bd-judge', 0);
+    setBdCell('bd-diff', 0);
+    setBdCell('bd-ird', 0);
   }
 
   const tot = document.getElementById('bd-tot');
   const tv = tot.querySelector('.bd-v');
-  const sign = stepReward >= 0 ? '+' : '';
-  tv.textContent = `${sign}${(stepReward || 0).toFixed(2)}`;
+  const totalReward = diag && diag.last_step
+    ? Number(diag.last_step.total || 0)
+    : Number(stepReward || 0);
+  const sign = totalReward >= 0 ? '+' : '';
+  tv.textContent = `${sign}${totalReward.toFixed(2)}`;
   tot.classList.remove('pos','neg');
-  if (stepReward > 0) tot.classList.add('pos');
-  else if (stepReward < 0) tot.classList.add('neg');
+  if (totalReward > 0) tot.classList.add('pos');
+  else if (totalReward < 0) tot.classList.add('neg');
 }
 
 function setBdCell(id, val) {
