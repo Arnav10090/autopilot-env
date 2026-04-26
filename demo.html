@@ -28,10 +28,10 @@
   --pink:#FF4DB8;
   --teal:#00E5BB;
 
-  --t1:#D0E0FF;
-  --t2:#7A90B8;
-  --t3:#3A4A6A;
-  --t4:#1E2A40;
+  --t1:#E0EEFF;
+  --t2:#A0B4D0;
+  --t3:#8899BB;
+  --t4:#5A6A88;
 
   --font-disp:'Bebas Neue',sans-serif;
   --font-mono:'JetBrains Mono',monospace;
@@ -456,6 +456,30 @@ main{
 .cbtn.rst{background:transparent;color:var(--t2);border:1px solid var(--b2)}
 .cbtn.rst:hover{color:var(--t1);border-color:var(--t2)}
 .cbtn:disabled{opacity:.3;cursor:not-allowed;box-shadow:none}
+.cbtn.mode-toggle{
+  background:transparent;border:1px solid var(--green);color:var(--green);
+  letter-spacing:.8px;padding:0 12px;font-size:8px;
+  transition:all .2s ease;
+}
+.cbtn.mode-toggle:hover{
+  background:rgba(0,230,118,.1);box-shadow:0 0 10px rgba(0,230,118,.2);
+}
+.cbtn.mode-toggle.ablation{
+  border-color:var(--amber);color:var(--amber);
+}
+.cbtn.mode-toggle.ablation:hover{
+  background:rgba(255,179,0,.1);box-shadow:0 0 10px rgba(255,179,0,.2);
+}
+.cbtn.mode-toggle .mode-dot{
+  width:6px;height:6px;border-radius:50%;flex-shrink:0;
+  background:var(--green);transition:background .2s;
+}
+.cbtn.mode-toggle.ablation .mode-dot{
+  background:var(--amber);animation:modePulse 1.5s ease infinite;
+}
+@keyframes modePulse{
+  0%,100%{opacity:1}50%{opacity:.4}
+}
 
 .c-div{width:1px;height:26px;background:var(--b2);flex-shrink:0;margin:0 2px}
 
@@ -526,14 +550,16 @@ input[type=range]::-webkit-slider-thumb{
 ═══════════════════════════════════════════════════ */
 #ep-ov{
   position:fixed;inset:0;background:rgba(3,5,13,.88);
-  display:none;align-items:center;justify-content:center;
+  display:none;align-items:flex-start;justify-content:center;
   z-index:100;backdrop-filter:blur(6px);
+  overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:32px 0;
 }
 #ep-ov.show{display:flex}
 .ep-card{
   background:var(--surf);border:1px solid var(--b3);
   border-radius:14px;padding:36px 44px;text-align:center;
-  max-width:440px;width:90%;
+  max-width:560px;width:90%;margin:auto;
   animation:popIn .4s cubic-bezier(.34,1.56,.64,1);
 }
 @keyframes popIn{from{opacity:0;transform:scale(.8)}to{opacity:1;transform:scale(1)}}
@@ -581,6 +607,41 @@ input[type=range]::-webkit-slider-thumb{
   border:none;border-radius:6px;cursor:pointer;transition:all .15s;
 }
 .ep-continue:hover{filter:brightness(1.1)}
+.ep-ablation{
+  background:var(--bg);border:1px solid var(--b2);
+  border-left:3px solid var(--green);
+  border-radius:8px;padding:14px;margin-bottom:18px;text-align:left;
+}
+.ep-ablation-lbl{
+  font-family:var(--font-mono);font-size:8px;letter-spacing:1.5px;
+  color:var(--green);margin-bottom:10px;
+}
+.ep-ablation-grid{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:8px;
+}
+.ep-ablation-cell{
+  background:rgba(255,255,255,.02);border:1px solid var(--b1);
+  border-radius:8px;padding:10px 8px;text-align:center;
+}
+.ep-ablation-cell .k{
+  display:block;font-family:var(--font-mono);font-size:7px;letter-spacing:1px;color:var(--t3);margin-bottom:4px;
+}
+.ep-ablation-cell .v{
+  display:block;font-family:var(--font-mono);font-size:16px;font-weight:700;color:var(--t1);
+}
+.ep-ablation-cell.delta.pos .v{color:var(--green)}
+.ep-ablation-cell.delta.neg .v{color:var(--red)}
+.ep-ablation-note{
+  margin-top:10px;font-family:var(--font-mono);font-size:7.5px;letter-spacing:.4px;color:var(--t3);line-height:1.5;
+}
+.ep-ablation-link{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:100%;margin:0 0 12px;padding:10px 12px;
+  background:rgba(176,77,255,.14);border:1px solid rgba(176,77,255,.35);
+  border-radius:6px;color:var(--purple);text-decoration:none;
+  font-family:var(--font-mono);font-size:9px;font-weight:700;letter-spacing:1.4px;
+}
+.ep-ablation-link:hover{filter:brightness(1.1)}
 
 /* ═══════════════════════════════════════════════════
    TOOLTIP
@@ -666,7 +727,7 @@ input[type=range]::-webkit-slider-thumb{
 .bd-cell.neg .bd-v{color:var(--red)}
 .bd-cell.tot .bd-v{color:var(--gold)}
 .bd-grid-v2{
-  grid-template-columns:repeat(4,1fr);margin-top:5px;
+  grid-template-columns:repeat(6,1fr);margin-top:5px;
 }
 .bd-grid-v2.legacy{opacity:.35;pointer-events:none}
 .stack-section{
@@ -684,6 +745,45 @@ input[type=range]::-webkit-slider-thumb{
 .stack-legend .sl-dot{
   width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:4px;vertical-align:middle;
 }
+
+/* Sample complexity tile */
+.sc-tile{
+  display:none;padding:8px 16px;border-bottom:1px solid var(--b1);
+  background:linear-gradient(180deg,rgba(0,230,118,.04),transparent);
+}
+.sc-tile.show{display:block;animation:bdIn .25s ease}
+.sc-tile-hdr{
+  display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:6px;
+}
+.sc-tile-lbl{
+  font-family:var(--font-mono);font-size:8px;letter-spacing:2px;color:var(--t3);
+}
+.sc-tile-badge{
+  font-family:var(--font-mono);font-size:7.5px;font-weight:700;letter-spacing:1px;
+  padding:3px 8px;border-radius:999px;
+  color:var(--green);border:1px solid rgba(0,230,118,.3);
+  background:rgba(0,230,118,.08);
+}
+.sc-tile-badge.unavail{
+  color:var(--t3);border-color:var(--b2);background:rgba(24,32,53,.5);
+}
+.sc-tile-grid{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:5px;
+}
+.sc-tile-cell{
+  background:var(--bg);border:1px solid var(--b1);border-radius:5px;
+  padding:6px 5px;text-align:center;
+}
+.sc-tile-cell .sc-k{
+  font-family:var(--font-mono);font-size:6.5px;letter-spacing:1px;
+  color:var(--t3);margin-bottom:3px;
+}
+.sc-tile-cell .sc-v{
+  font-family:var(--font-mono);font-size:12px;font-weight:700;color:var(--t1);
+}
+.sc-tile-cell .sc-v.hi{color:var(--green)}
+.sc-tile-cell .sc-v.dim{color:var(--t3);opacity:.45}
 
 /* ═══════════════════════════════════════════════════
    CHAOS DAG NODE STYLE
@@ -871,6 +971,34 @@ input[type=range]::-webkit-slider-thumb{
         <span class="leg"><span class="sl-dot" style="background:#00E5FF"></span>EXTRINSIC</span>
         <span class="leg"><span class="sl-dot" style="background:#00E676"></span>PBRS</span>
         <span class="leg"><span class="sl-dot" style="background:#B04DFF"></span>INTRINSIC</span>
+        <span class="leg"><span class="sl-dot" style="background:#FFC400"></span>JUDGE</span>
+        <span class="leg"><span class="sl-dot" style="background:#FF5ACD"></span>DIFF</span>
+        <span class="leg"><span class="sl-dot" style="background:#FF6B6B"></span>IRD</span>
+      </div>
+    </div>
+
+    <div class="sc-tile" id="sc-tile">
+      <div class="sc-tile-hdr">
+        <span class="sc-tile-lbl">SAMPLE COMPLEXITY · TRAINING METRICS</span>
+        <span class="sc-tile-badge unavail" id="sc-tile-badge">NO DATA</span>
+      </div>
+      <div class="sc-tile-grid">
+        <div class="sc-tile-cell">
+          <div class="sc-k">EPISODES → 0.5</div>
+          <div class="sc-v dim" id="sc-ep05">—</div>
+        </div>
+        <div class="sc-tile-cell">
+          <div class="sc-k">EPISODES → 1.0</div>
+          <div class="sc-v dim" id="sc-ep10">—</div>
+        </div>
+        <div class="sc-tile-cell">
+          <div class="sc-k">GRPO STEPS</div>
+          <div class="sc-v dim" id="sc-grpo">—</div>
+        </div>
+        <div class="sc-tile-cell">
+          <div class="sc-k">EVAL EPISODES</div>
+          <div class="sc-v dim" id="sc-evals">—</div>
+        </div>
       </div>
     </div>
 
@@ -916,8 +1044,10 @@ input[type=range]::-webkit-slider-thumb{
       </div>
       <div class="bd-grid bd-grid-v2" id="bd-grid-v2">
         <div class="bd-cell dim" id="bd-pbrs"><div class="bd-k">PBRS γΦ′−Φ</div><div class="bd-v">0.00</div></div>
-        <div class="bd-cell dim" id="bd-intr"><div class="bd-k">INTR β/√N</div><div class="bd-v">0.00</div></div>
-        <div class="bd-cell dim" id="bd-decay"><div class="bd-k">DECAY</div><div class="bd-v">1.00</div></div>
+        <div class="bd-cell dim" id="bd-intr"><div class="bd-k">INTR COUNT+RND</div><div class="bd-v">0.00</div></div>
+        <div class="bd-cell dim" id="bd-judge"><div class="bd-k">JUDGE</div><div class="bd-v">0.00</div></div>
+        <div class="bd-cell dim" id="bd-diff"><div class="bd-k">DIFF</div><div class="bd-v">0.00</div></div>
+        <div class="bd-cell dim" id="bd-ird"><div class="bd-k">IRD</div><div class="bd-v">0.00</div></div>
         <div class="bd-cell tot" id="bd-tot"><div class="bd-k">TOTAL Σ</div><div class="bd-v">+0.00</div></div>
       </div>
     </div>
@@ -966,6 +1096,13 @@ input[type=range]::-webkit-slider-thumb{
     <span class="spd-val" id="spd-val">1×</span>
   </div>
 
+  <div class="c-div"></div>
+
+  <button class="cbtn mode-toggle" id="btn-mode" onclick="cycleRewardMode()" title="Live reward mode toggle — cycles through ablation configurations">
+    <span class="mode-dot"></span>
+    <span id="mode-label">MODE: FULL</span>
+  </button>
+
   <div class="c-spacer"></div>
 </div>
 
@@ -987,6 +1124,24 @@ input[type=range]::-webkit-slider-thumb{
     <div class="ep-ttl" id="ep-ttl">EPISODE COMPLETE</div>
     <div class="ep-score" id="ep-score">2.00</div>
     <div class="ep-sub">TOTAL EPISODE REWARD</div>
+    <div class="ep-ablation">
+      <div class="ep-ablation-lbl">EPISODE ABLATION — WHAT DID REWARD ENGINEERING BUY?</div>
+      <div class="ep-ablation-grid">
+        <div class="ep-ablation-cell">
+          <span class="k">TOTAL</span>
+          <span class="v" id="ep-ab-total">0.00</span>
+        </div>
+        <div class="ep-ablation-cell">
+          <span class="k">WITHOUT V2 STACK</span>
+          <span class="v" id="ep-ab-proxy">0.00</span>
+        </div>
+        <div class="ep-ablation-cell delta" id="ep-ab-delta-cell">
+          <span class="k">DELTA</span>
+          <span class="v" id="ep-ab-delta">0.00</span>
+        </div>
+      </div>
+      <div class="ep-ablation-note" id="ep-ab-note">Proxy-only baseline is estimated client-side from accumulated extrinsic-only reward.</div>
+    </div>
     <div class="ep-t4">
       <div class="ep-t4-lbl" id="ep-t4-lbl">▲ T4 SELF-IMPROVEMENT — CURRICULUM AUTO-ESCALATING</div>
       <div class="ep-arrow-row">
@@ -1019,6 +1174,7 @@ input[type=range]::-webkit-slider-thumb{
       </div>
       <div class="ep-diff-news" id="ep-diff-news">—</div>
     </div>
+    <a class="ep-ablation-link" href="ablation_curve.png" target="_blank" rel="noopener">OPEN ABLATION CURVE</a>
     <button class="ep-continue" onclick="closeEp()">CONTINUE →</button>
   </div>
 </div>
@@ -1040,6 +1196,64 @@ const API = 'https://arnav100904-adaptive-enterprise-autopilot.hf.space';
 let curTask = 'easy';
 let running = false;
 let stepDelay = 850;
+
+// ── REWARD MODE TOGGLE (Phase 10) ───────────────────────────────────────
+const REWARD_MODES = ['full', 'proxy_only', 'no_pbrs', 'no_intrinsic'];
+const REWARD_MODE_LABELS = {
+  full: 'FULL',
+  proxy_only: 'PROXY ONLY',
+  no_pbrs: 'NO PBRS',
+  no_intrinsic: 'NO INTRINSIC',
+};
+let _currentModeIdx = 0;
+let _currentMode = 'full';
+
+async function cycleRewardMode() {
+  _currentModeIdx = (_currentModeIdx + 1) % REWARD_MODES.length;
+  const nextMode = REWARD_MODES[_currentModeIdx];
+  const btn = document.getElementById('btn-mode');
+  const label = document.getElementById('mode-label');
+
+  // Optimistic UI update
+  label.textContent = `MODE: ${REWARD_MODE_LABELS[nextMode]}`;
+  const isAblation = nextMode !== 'full';
+  btn.classList.toggle('ablation', isAblation);
+
+  try {
+    const r = await fetch(`${API}/diagnostics/mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: nextMode }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok) {
+      _currentMode = data.mode;
+      addLog('sys', '⚙', `Reward mode switched → ${REWARD_MODE_LABELS[_currentMode]}`);
+    } else {
+      throw new Error(data.error || 'unknown error');
+    }
+  } catch (e) {
+    // Revert on failure
+    _currentModeIdx = REWARD_MODES.indexOf(_currentMode);
+    label.textContent = `MODE: ${REWARD_MODE_LABELS[_currentMode]}`;
+    btn.classList.toggle('ablation', _currentMode !== 'full');
+    addLog('warn', '⚠', `Mode switch failed: ${e.message}`);
+  }
+}
+
+function syncModeFromDiag(diag) {
+  if (!diag || !diag.config || !diag.config.mode) return;
+  const serverMode = diag.config.mode;
+  if (serverMode !== _currentMode && REWARD_MODES.includes(serverMode)) {
+    _currentMode = serverMode;
+    _currentModeIdx = REWARD_MODES.indexOf(serverMode);
+    const btn = document.getElementById('btn-mode');
+    const label = document.getElementById('mode-label');
+    if (label) label.textContent = `MODE: ${REWARD_MODE_LABELS[_currentMode]}`;
+    if (btn) btn.classList.toggle('ablation', _currentMode !== 'full');
+  }
+}
 let totalRew = 0, stepCount = 0;
 let EXTR_MAX = 5.0;     // extrinsic-grader ceiling for current episode (num_tasks * 1.0); refreshed on /reset
 const TYPICAL_TASKS = { easy: 5, medium: 9, hard: 13 };  // representative task counts per difficulty (from workflows.py)
@@ -1118,19 +1332,40 @@ const STORY = {
     body:'<b>proxy-only</b> vs <b>+PBRS</b> vs <b>+intrinsic</b> vs <b>full stack</b>. The bar chart in the README proves each addition contributes — anything that didn\'t was removed before submission.',
     border:'green-border', step:5,
   },
+  irdPosterior: {
+    phase:'ALIGNMENT · IRD POSTERIOR CORRECTION',
+    title:'PROXY REWARD GETS A SAFETY CHECK',
+    body:'When the proxy signal can miss intent, the env adds a lightweight <b>posterior correction</b>. This term estimates how much the true reward should differ from the proxy and nudges the trainer toward the corrected total.',
+    border:'purple-border', step:4,
+  },
+  sampleComplexity: {
+    phase:'EFFICIENCY · SAMPLE COMPLEXITY',
+    title:'HOW FAST DOES IT GET GOOD?',
+    body:'We track <b>episodes to reward thresholds</b> so judges can see not just final score, but how quickly the stack reaches useful behavior. Faster threshold crossing means lower sample complexity and less wasted training.',
+    border:'green-border', step:5,
+  },
+  intrinsicDecayed: {
+    phase:'EXPLORATION · BONUS FADES OUT',
+    title:'INTRINSIC REWARD STEPS ASIDE',
+    body:'The intrinsic bonus is temporary by design. Once the decay factor falls near zero, exploration stops dominating and the agent is paid mostly by the deterministic enterprise grader plus the bounded reward stack terms.',
+    border:'purple-border', step:5,
+  },
 };
 
 let curStoryStep = 0;
-let stackHistory = [];   // array of {extr, pbrs, intr} per step
+let stackHistory = [];   // array of {extr, pbrs, intr, judge, diff, ird} per step
 
 function pushStackFrame(diag) {
   if (!diag || !diag.last_step) {
-    stackHistory.push({extr: 0, pbrs: 0, intr: 0});
+    stackHistory.push({extr: 0, pbrs: 0, intr: 0, judge: 0, diff: 0, ird: 0});
   } else {
     stackHistory.push({
       extr: Number(diag.last_step.extrinsic_total || 0),
       pbrs: Number(diag.last_step.pbrs_shaping    || 0),
-      intr: Number(diag.last_step.intrinsic_count || 0),
+      intr: Number(diag.last_step.intrinsic_count || 0) + Number(diag.last_step.intrinsic_rnd || 0),
+      judge: Number(diag.last_step.weighted_judge || 0),
+      diff: Number(diag.last_step.difference_reward || 0),
+      ird: Number(diag.last_step.ird_posterior_correction || 0),
     });
   }
   renderStackCanvas();
@@ -1151,9 +1386,14 @@ function renderStackCanvas() {
   const n = stackHistory.length;
   const colW = Math.max(2, Math.min(28, cssW / n));
   let maxAbs = 0.5;
+  const stackKeys = ['extr', 'pbrs', 'intr', 'judge', 'diff', 'ird'];
   for (const f of stackHistory) {
-    const pos = Math.max(0, f.extr) + Math.max(0, f.pbrs) + Math.max(0, f.intr);
-    const neg = Math.min(0, f.extr) + Math.min(0, f.pbrs) + Math.min(0, f.intr);
+    let pos = 0;
+    let neg = 0;
+    for (const k of stackKeys) {
+      pos += Math.max(0, f[k] || 0);
+      neg += Math.min(0, f[k] || 0);
+    }
     maxAbs = Math.max(maxAbs, pos, -neg);
   }
   const mid = cssH / 2;
@@ -1162,13 +1402,20 @@ function renderStackCanvas() {
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(cssW, mid); ctx.stroke();
 
-  const colors = { extr: '#00E5FF', pbrs: '#00E676', intr: '#B04DFF' };
-  let runningTotal = 0;
+  const colors = {
+    extr: '#00E5FF',
+    pbrs: '#00E676',
+    intr: '#B04DFF',
+    judge: '#FFC400',
+    diff: '#FF5ACD',
+    ird: '#FF6B6B',
+  };
+  let lastFrameTotal = 0;
   for (let i = 0; i < n; i++) {
     const f = stackHistory[i];
     const x = i * colW;
     let yPos = mid, yNeg = mid;
-    for (const k of ['extr', 'pbrs', 'intr']) {
+    for (const k of stackKeys) {
       const v = f[k];
       if (v >= 0) {
         const h = v * scale;
@@ -1184,13 +1431,16 @@ function renderStackCanvas() {
         yNeg += h;
       }
     }
-    runningTotal += f.extr + f.pbrs + f.intr;
+    lastFrameTotal = stackKeys.reduce((sum, key) => sum + Number(f[key] || 0), 0);
   }
-  document.getElementById('stack-total').textContent = (runningTotal>=0?'+':'') + runningTotal.toFixed(2);
+  document.getElementById('stack-total').textContent = (lastFrameTotal>=0?'+':'') + lastFrameTotal.toFixed(2);
 }
 
 let _firedPbrsCard = false;
 let _firedIntrCard = false;
+let _firedIrdCard = false;
+let _firedDecayCard = false;
+let _firedSampleComplexityCard = false;
 
 function fireConditionalStories(diag) {
   if (!diag || !diag.last_step) return;
@@ -1201,6 +1451,14 @@ function fireConditionalStories(diag) {
   if (!_firedIntrCard && diag.last_step.intrinsic_count > 1e-4) {
     _firedIntrCard = true;
     setTimeout(() => triggerStory('intrinsicNovel'), 1500);
+  }
+  if (!_firedIrdCard && Math.abs(Number(diag.last_step.ird_posterior_correction || 0)) > 1e-4) {
+    _firedIrdCard = true;
+    setTimeout(() => triggerStory('irdPosterior'), 900);
+  }
+  if (!_firedDecayCard && Number(diag.last_step.intrinsic_decay_factor ?? 1) < 0.05) {
+    _firedDecayCard = true;
+    setTimeout(() => triggerStory('intrinsicDecayed'), 1200);
   }
 }
 
@@ -1277,6 +1535,8 @@ async function fetchDiagnostics() {
 }
 
 // ── INIT ────────────────────────────────────────────────────────────────
+let _trainingMetrics = null;
+
 async function init() {
   previewExtrMax(curTask);
   try {
@@ -1288,6 +1548,75 @@ async function init() {
     setLive('err','OFFLINE');
     addLog('er','✗','Cannot reach API. Ensure the HuggingFace Space is running.');
   }
+  // Fetch training metrics for sample complexity tile
+  fetchTrainingMetrics();
+}
+
+async function fetchTrainingMetrics() {
+  try {
+    const r = await fetch(`${API}/metrics`);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!data.available) {
+      showSampleComplexityTile(null);
+      return;
+    }
+    _trainingMetrics = data;
+    showSampleComplexityTile(data);
+    updateSampleComplexityStoryCard(data);
+  } catch {
+    showSampleComplexityTile(null);
+  }
+}
+
+function showSampleComplexityTile(data) {
+  const tile = document.getElementById('sc-tile');
+  const badge = document.getElementById('sc-tile-badge');
+  if (!tile) return;
+  tile.classList.add('show');
+
+  if (!data) {
+    badge.textContent = 'NO DATA';
+    badge.className = 'sc-tile-badge unavail';
+    return;
+  }
+
+  badge.textContent = 'LOADED';
+  badge.className = 'sc-tile-badge';
+
+  const ep05 = data.episodes_to_threshold_0_5;
+  const ep10 = data.episodes_to_threshold_1_0;
+  setScValue('sc-ep05', ep05 >= 0 ? String(ep05) : 'N/R', ep05 >= 0);
+  setScValue('sc-ep10', ep10 >= 0 ? String(ep10) : 'N/R', ep10 >= 0);
+  setScValue('sc-grpo', data.total_grpo_steps > 0 ? String(data.total_grpo_steps) : '—', data.total_grpo_steps > 0);
+  setScValue('sc-evals', data.total_eval_episodes > 0 ? String(data.total_eval_episodes) : '—', data.total_eval_episodes > 0);
+}
+
+function setScValue(id, text, highlight) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = `sc-v${highlight ? ' hi' : ' dim'}`;
+}
+
+function updateSampleComplexityStoryCard(data) {
+  if (!data) return;
+  const card = STORY.sampleComplexity;
+  if (!card) return;
+  const ep05 = data.episodes_to_threshold_0_5;
+  const ep10 = data.episodes_to_threshold_1_0;
+  let body = 'We track <b>episodes to reward thresholds</b> so judges can see not just final score, but how quickly the stack reaches useful behavior.';
+  if (ep05 >= 0) {
+    body += ` The agent crossed <b>reward ≥ 0.5 in ${ep05} episodes</b>.`;
+  }
+  if (ep10 >= 0) {
+    body += ` It reached <b>reward ≥ 1.0 in ${ep10} episodes</b>.`;
+  }
+  if (ep05 < 0 && ep10 < 0) {
+    body += ' Threshold data not yet recorded — run training to populate.';
+  }
+  body += ' Faster threshold crossing means lower sample complexity and less wasted training.';
+  card.body = body;
 }
 function setLive(cls, txt) {
   document.getElementById('live-dot').className = `live-dot ${cls}`;
@@ -1331,6 +1660,16 @@ function resetAll() {
   resetJudgeUi();
   _firedPbrsCard = false;
   _firedIntrCard = false;
+  _firedIrdCard = false;
+  _firedDecayCard = false;
+  _firedSampleComplexityCard = false;
+  // Reset mode toggle to full on episode reset
+  _currentModeIdx = 0;
+  _currentMode = 'full';
+  const modeBtn = document.getElementById('btn-mode');
+  const modeLabel = document.getElementById('mode-label');
+  if (modeLabel) modeLabel.textContent = 'MODE: FULL';
+  if (modeBtn) modeBtn.classList.remove('ablation');
   enBtns();
   triggerStory('intro');
 }
@@ -1396,6 +1735,7 @@ async function runDemo(mode) {
       break;
     }
     const diag = await fetchDiagnostics();
+    syncModeFromDiag(diag);
     pushStackFrame(diag);
     fireConditionalStories(diag);
 
@@ -1748,11 +2088,22 @@ function addLog(type, ic, txt) {
 // ── EPISODE OVERLAY ───────────────────────────────────────────────────────
 function showEp(rew, diff) {
   const ok = rew > 0.5;
+  const proxyOnly = stackHistory.reduce((sum, frame) => sum + Number(frame.extr || 0), 0);
+  const delta = rew - proxyOnly;
   document.getElementById('ep-ic').textContent = ok ? '✓' : '✗';
   document.getElementById('ep-ic').className = `ep-icon${ok?'':' fail'}`;
   document.getElementById('ep-ttl').textContent = ok ? 'EPISODE COMPLETE' : 'EPISODE FAILED';
   document.getElementById('ep-score').textContent = rew.toFixed(2);
   document.getElementById('ep-score').className = `ep-score${ok?'':' fail'}`;
+  document.getElementById('ep-ab-total').textContent = signed(rew);
+  document.getElementById('ep-ab-proxy').textContent = signed(proxyOnly);
+  document.getElementById('ep-ab-delta').textContent = signed(delta);
+  const deltaCell = document.getElementById('ep-ab-delta-cell');
+  deltaCell.classList.remove('pos', 'neg');
+  if (delta > 1e-6) deltaCell.classList.add('pos');
+  else if (delta < -1e-6) deltaCell.classList.add('neg');
+  document.getElementById('ep-ab-note').textContent =
+    `Proxy-only baseline estimated from ${stackHistory.length} step${stackHistory.length === 1 ? '' : 's'} of extrinsic-only reward.`;
   document.getElementById('ep-old').textContent = `DIFF ${diff}`;
   document.getElementById('ep-new').textContent = `DIFF ${Math.min(10, diff + (ok ? 1 : 0))}`;
 
@@ -1783,6 +2134,10 @@ function showEp(rew, diff) {
 function closeEp() {
   document.getElementById('ep-ov').classList.remove('show');
   setTimeout(() => triggerStory('ablationProof'), 350);
+  if (!_firedSampleComplexityCard) {
+    _firedSampleComplexityCard = true;
+    setTimeout(() => triggerStory('sampleComplexity'), 2400);
+  }
 }
 function setText(id, t) { const el = document.getElementById(id); if (el) el.textContent = t; }
 function setDeltaCell(id, nv, ov) {
@@ -1861,28 +2216,37 @@ function renderBreakdown(breakdown, stepReward, diag) {
   const extrCell = document.getElementById('bd-extr');
   extrCell.querySelector('.bd-v').textContent = (extr>=0?'+':'') + extr.toFixed(2);
 
-  // v2 stack (PBRS + intrinsic + decay + total) — pulled from /diagnostics
+  // v2 stack row 2 (PBRS + intrinsic + judge + diff + IRD + total)
   const v2 = document.getElementById('bd-grid-v2');
   if (diag && diag.last_step) {
     v2.classList.remove('legacy');
     setBdCell('bd-pbrs', diag.last_step.pbrs_shaping || 0);
-    setBdCell('bd-intr', diag.last_step.intrinsic_count || 0);
-    const decayCell = document.getElementById('bd-decay');
-    const decayVal = diag.last_step.intrinsic_decay_factor ?? 1.0;
-    decayCell.classList.remove('pos','neg','dim');
-    if (decayVal < 0.05) decayCell.classList.add('dim');
-    decayCell.querySelector('.bd-v').textContent = decayVal.toFixed(2);
+    setBdCell(
+      'bd-intr',
+      Number(diag.last_step.intrinsic_count || 0) + Number(diag.last_step.intrinsic_rnd || 0)
+    );
+    setBdCell('bd-judge', Number(diag.last_step.weighted_judge || 0));
+    setBdCell('bd-diff', Number(diag.last_step.difference_reward || 0));
+    setBdCell('bd-ird', Number(diag.last_step.ird_posterior_correction || 0));
   } else {
     v2.classList.add('legacy');
+    setBdCell('bd-pbrs', 0);
+    setBdCell('bd-intr', 0);
+    setBdCell('bd-judge', 0);
+    setBdCell('bd-diff', 0);
+    setBdCell('bd-ird', 0);
   }
 
   const tot = document.getElementById('bd-tot');
   const tv = tot.querySelector('.bd-v');
-  const sign = stepReward >= 0 ? '+' : '';
-  tv.textContent = `${sign}${(stepReward || 0).toFixed(2)}`;
+  const totalReward = diag && diag.last_step
+    ? Number(diag.last_step.total || 0)
+    : Number(stepReward || 0);
+  const sign = totalReward >= 0 ? '+' : '';
+  tv.textContent = `${sign}${totalReward.toFixed(2)}`;
   tot.classList.remove('pos','neg');
-  if (stepReward > 0) tot.classList.add('pos');
-  else if (stepReward < 0) tot.classList.add('neg');
+  if (totalReward > 0) tot.classList.add('pos');
+  else if (totalReward < 0) tot.classList.add('neg');
 }
 
 function setBdCell(id, val) {

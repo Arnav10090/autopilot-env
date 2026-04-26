@@ -134,6 +134,75 @@ def clamp_eval_score(value: float) -> float:
     return max(EVAL_SCORE_MIN, min(EVAL_SCORE_MAX, float(value)))
 
 
+EPISODE_REWARD_COMPONENT_KEYS = (
+    "extrinsic_total",
+    "pbrs_shaping",
+    "intrinsic_count",
+    "intrinsic_rnd",
+    "weighted_judge",
+    "difference_reward",
+    "ird_posterior_correction",
+    "total",
+)
+
+
+def _blank_episode_components() -> Dict[str, float]:
+    return {key: 0.0 for key in EPISODE_REWARD_COMPONENT_KEYS}
+
+
+def _normalize_episode_components(components: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    normalized = _blank_episode_components()
+    if not components:
+        return normalized
+    for key in EPISODE_REWARD_COMPONENT_KEYS:
+        try:
+            normalized[key] = round(float(components.get(key, 0.0)), 4)
+        except Exception:
+            normalized[key] = 0.0
+    return normalized
+
+
+def _summarize_series(values: List[float]) -> Dict[str, float]:
+    if not values:
+        return {
+            "mean": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "first_10_pct": 0.0,
+            "last_10_pct": 0.0,
+        }
+    window = max(1, len(values) // 10)
+    return {
+        "mean": round(sum(values) / len(values), 4),
+        "min": round(min(values), 4),
+        "max": round(max(values), 4),
+        "first_10_pct": round(sum(values[:window]) / len(values[:window]), 4),
+        "last_10_pct": round(sum(values[-window:]) / len(values[-window:]), 4),
+    }
+
+
+def _summarize_component_records_by_key(
+    records: List[Dict[str, Any]],
+    group_key: str,
+) -> Dict[str, Dict[str, Dict[str, float]]]:
+    grouped: Dict[str, Dict[str, List[float]]] = {}
+    for record in records:
+        group = str(record.get(group_key, "unknown"))
+        component_bucket = grouped.setdefault(
+            group,
+            {key: [] for key in EPISODE_REWARD_COMPONENT_KEYS},
+        )
+        for key in EPISODE_REWARD_COMPONENT_KEYS:
+            component_bucket[key].append(float(record.get(key, 0.0)))
+    return {
+        group: {
+            key: _summarize_series(values)
+            for key, values in component_bucket.items()
+        }
+        for group, component_bucket in grouped.items()
+    }
+
+
 # ── Metrics tracker ───────────────────────────────────────────────────────────
 
 @dataclass
@@ -158,6 +227,10 @@ class TrainingMetrics:
     episodes_to_threshold_1_0: int = -1   # first episode where eval_reward >= 1.0
     pre_train_rewards: Dict[str, float]  = field(default_factory=dict)
     post_train_rewards: Dict[str, float] = field(default_factory=dict)
+    reward_component_series: Dict[str, List[float]] = field(
+        default_factory=lambda: {key: [] for key in EPISODE_REWARD_COMPONENT_KEYS}
+    )
+    reward_component_eval_log: List[Dict[str, Any]] = field(default_factory=list)
     _step: int = field(default=0, repr=False)
     _accum: List[float] = field(default_factory=list, repr=False)
 
@@ -176,13 +249,33 @@ class TrainingMetrics:
             window = self.grpo_rewards[-10:]
             print(f"[step {self._step:4d}] mean_grpo_reward={sum(window)/len(window):.3f}", flush=True)
 
-    def record_eval(self, step: int, task: str, reward: float, diff: float, phase: str = "train"):
+    def record_eval(
+        self,
+        step: int,
+        task: str,
+        reward: float,
+        diff: float,
+        phase: str = "train",
+        components: Optional[Dict[str, Any]] = None,
+    ):
         reward = clamp_eval_score(reward)
         self.eval_steps.append(step)
         self.eval_rewards.append(round(reward, 4))
         self.eval_tasks.append(task)
         self.eval_phase.append(phase)
         self.difficulty.append(round(diff, 4))
+        normalized_components = _normalize_episode_components(components)
+        for key, value in normalized_components.items():
+            self.reward_component_series[key].append(value)
+        self.reward_component_eval_log.append(
+            {
+                "step": int(step),
+                "task": str(task),
+                "phase": str(phase),
+                "difficulty": round(diff, 4),
+                **normalized_components,
+            }
+        )
 
         ep_idx = len(self.eval_rewards)
         if self.episodes_to_threshold_0_5 < 0 and reward >= 0.5:
@@ -211,23 +304,31 @@ class TrainingMetrics:
             "episodes_to_threshold_1_0": self.episodes_to_threshold_1_0,
             "pre_train_rewards": self.pre_train_rewards,
             "post_train_rewards": self.post_train_rewards,
+            "reward_component_series": self.reward_component_series,
+            "reward_component_eval_log": self.reward_component_eval_log,
         }
 
+        reward_component_summary = {
+            key: _summarize_series(values)
+            for key, values in self.reward_component_series.items()
+        }
+        data_to_save["reward_component_summary"] = reward_component_summary
+        data_to_save["reward_component_summary_by_phase"] = _summarize_component_records_by_key(
+            self.reward_component_eval_log,
+            "phase",
+        )
+        data_to_save["reward_components"] = reward_component_summary
+
         if hasattr(self, "component_log") and self.component_log:
-            n = len(self.component_log)
             agg = {}
             for key in self.component_log[0]:
                 vals = [c[key] for c in self.component_log]
-                agg[key] = {
-                    "mean": round(sum(vals) / n, 4),
-                    "first_10_pct": round(sum(vals[:max(1, n // 10)]) / max(1, n // 10), 4),
-                    "last_10_pct": round(sum(vals[-(n // 10):]) / max(1, n // 10), 4),
-                }
-            data_to_save["reward_components"] = agg
+                agg[key] = _summarize_series(vals)
+            data_to_save["grpo_reward_fn_component_summary"] = agg
 
         with open(path, "w") as f:
             json.dump(data_to_save, f, indent=2)
-        print(f"[metrics] Saved {len(self.grpo_steps)} GRPO steps + {len(self.eval_steps)} evals → {path}")
+        print(f"[metrics] Saved {len(self.grpo_steps)} GRPO steps + {len(self.eval_steps)} evals -> {path}")
 
 
 metrics = TrainingMetrics()
@@ -506,6 +607,7 @@ def run_episode(
     obs = env.reset()
     total = 0.0
     steps = 0
+    episode_components = _blank_episode_components()
     while not obs.done and steps < MAX_STEPS_EP:
         prompt = _build_prompt(obs)
         raw = model_fn(prompt)
@@ -516,11 +618,14 @@ def run_episode(
             reasoning = reasoning or ""
             params = {}
 
-        obs, r, done, _ = env.step(AutopilotAction(
+        obs, r, done, info = env.step(AutopilotAction(
             tool=tool,
             params=params if isinstance(params, dict) else {},
             reasoning=reasoning or "",
         ))
+        breakdown = (info or {}).get("breakdown", {})
+        for key in EPISODE_REWARD_COMPONENT_KEYS:
+            episode_components[key] += float(breakdown.get(key, 0.0))
         total += r
         steps += 1
 
@@ -535,6 +640,7 @@ def run_episode(
         "raw_reward": total,
         "completion_rate": completion_rate,
         "difficulty": diff,
+        "reward_components": _normalize_episode_components(episode_components),
     }
 
 
@@ -683,7 +789,8 @@ def make_callback(get_model_fn):
                             )
                             metrics.record_eval(state.global_step, "easy",
                                                 r["total_reward"], r["difficulty"],
-                                                phase="train")
+                                                phase="train",
+                                                components=r.get("reward_components"))
                         except Exception as e:
                             print(f"[callback eval error] {e}", flush=True)
 
@@ -793,7 +900,14 @@ def main():
             judge_enabled=USE_LEARNED_JUDGE,
         )
         metrics.pre_train_rewards[task] = r["total_reward"]
-        metrics.record_eval(0, task, r["total_reward"], r["difficulty"], phase="pre")
+        metrics.record_eval(
+            0,
+            task,
+            r["total_reward"],
+            r["difficulty"],
+            phase="pre",
+            components=r.get("reward_components"),
+        )
 
     # Phase 1 — SFT warmup
     print("\n[train] === PHASE 1: SFT warmup ===", flush=True)
@@ -884,13 +998,20 @@ def main():
             judge_enabled=USE_LEARNED_JUDGE,
         )
         metrics.post_train_rewards[task] = r["total_reward"]
-        metrics.record_eval(final_step, task, r["total_reward"], r["difficulty"], phase="post")
+        metrics.record_eval(
+            final_step,
+            task,
+            r["total_reward"],
+            r["difficulty"],
+            phase="post",
+            components=r.get("reward_components"),
+        )
 
     print("\n[train] === IMPROVEMENT SUMMARY ===")
     for task in TASKS:
         b = metrics.pre_train_rewards.get(task, 0)
         a = metrics.post_train_rewards.get(task, 0)
-        print(f"  {task:8s}: {b:.3f} → {a:.3f}  ({a-b:+.3f})")
+        print(f"  {task:8s}: {b:.3f} -> {a:.3f}  ({a-b:+.3f})")
 
     if judge_buffer is not None and judge_buffer.size() > 0:
         judge_buffer.flush_jsonl(JUDGE_LOG_PATH)
@@ -929,6 +1050,7 @@ def plot_reward_curve(path: str = "training_metrics.json", include_curriculum: b
     difficulty   = data.get("difficulty", [])
     pre          = {k: clamp_eval_score(v) for k, v in data.get("pre_train_rewards", {}).items()}
     post         = {k: clamp_eval_score(v) for k, v in data.get("post_train_rewards", {}).items()}
+    component_eval_log = data.get("reward_component_eval_log", [])
 
     try:
         import matplotlib.pyplot as plt
@@ -1070,13 +1192,93 @@ def plot_reward_curve(path: str = "training_metrics.json", include_curriculum: b
         plt.savefig("reward_curve.png", dpi=150, bbox_inches="tight")
         print(f"[plot] Saved reward_curve.png  "
               f"({len(grpo_steps)} GRPO steps, {len(eval_steps)} eval checkpoints)")
+        plt.close(fig)
+
+        if component_eval_log:
+            fig_components, ax_components = plt.subplots(1, 1, figsize=(15, 6))
+            x = list(range(1, len(component_eval_log) + 1))
+            intrinsic_total = [
+                round(
+                    float(entry.get("intrinsic_count", 0.0))
+                    + float(entry.get("intrinsic_rnd", 0.0)),
+                    4,
+                )
+                for entry in component_eval_log
+            ]
+            component_series = [
+                ("extrinsic_total", "Extrinsic", "#00bcd4", 2.2),
+                ("pbrs_shaping", "PBRS", "#2ecc71", 1.8),
+                ("weighted_judge", "Judge", "#f39c12", 1.8),
+                ("difference_reward", "Difference", "#8e44ad", 1.8),
+                ("ird_posterior_correction", "IRD", "#e74c3c", 1.8),
+                ("total", "Total", "#111111", 2.6),
+            ]
+            for key, label, color, width in component_series:
+                values = [float(entry.get(key, 0.0)) for entry in component_eval_log]
+                ax_components.plot(
+                    x,
+                    values,
+                    marker="o",
+                    markersize=4,
+                    linewidth=width,
+                    color=color,
+                    label=label,
+                )
+            ax_components.plot(
+                x,
+                intrinsic_total,
+                marker="o",
+                markersize=4,
+                linewidth=1.8,
+                color="#7d3cff",
+                label="Intrinsic (count+rnd)",
+            )
+            for phase, marker in (("pre", "D"), ("train", "o"), ("post", "s")):
+                xs = [
+                    idx + 1
+                    for idx, entry in enumerate(component_eval_log)
+                    if entry.get("phase") == phase
+                ]
+                ys = [
+                    float(component_eval_log[idx - 1].get("total", 0.0))
+                    for idx in xs
+                ]
+                if xs:
+                    ax_components.scatter(
+                        xs,
+                        ys,
+                        marker=marker,
+                        s=60,
+                        color="#111111",
+                        zorder=5,
+                        label=f"Total markers ({phase})",
+                    )
+            ax_components.axhline(0.0, color="black", linewidth=0.6, alpha=0.4)
+            ax_components.set_xlabel("Eval checkpoint", fontsize=11)
+            ax_components.set_ylabel("Episode-summed component value", fontsize=11)
+            ax_components.set_title(
+                "Reward decomposition across evaluation checkpoints",
+                fontsize=11,
+            )
+            ax_components.grid(alpha=0.3)
+            ax_components.legend(
+                loc="center left",
+                bbox_to_anchor=(1.01, 0.5),
+                fontsize=8,
+                ncol=1,
+                borderaxespad=0.0,
+            )
+            plt.tight_layout(rect=[0, 0, 0.84, 0.96])
+            plt.savefig("reward_decomposition.png", dpi=150, bbox_inches="tight")
+            print(f"[plot] Saved reward_decomposition.png  ({len(component_eval_log)} eval checkpoints)")
+            plt.close(fig_components)
 
         print("\nImprovement summary:")
         for t in ["easy", "medium", "hard"]:
             b = pre.get(t); a = post.get(t)
             if b is not None and a is not None:
-                arrow = "↑" if a > b else ("↓" if a < b else "→")
-                print(f"  {t:8s}: {b:.3f} → {a:.3f}  {arrow}  ({a-b:+.3f})")
+                arrow = "up" if a > b else ("down" if a < b else "flat")
+                print(f"  {t:8s}: {b:.3f} -> {a:.3f}  {arrow}  ({a-b:+.3f})")
 
         print("\n" + "=" * 52)
         print(f"{'TASK':<10} {'UNTRAINED':>12} {'TRAINED':>12} {'GAIN':>10}")
@@ -1095,7 +1297,7 @@ def plot_reward_curve(path: str = "training_metrics.json", include_curriculum: b
         if pre and post:
             for t in ["easy","medium","hard"]:
                 if t in pre:
-                    print(f"  {t}: {pre[t]:.3f} → {post.get(t,'?')}")
+                    print(f"  {t}: {pre[t]:.3f} -> {post.get(t,'?')}")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ Endpoints:
 """
 
 from __future__ import annotations
+import json
 import os
 import sys
 from pathlib import Path
@@ -241,23 +242,45 @@ def diagnostics():
     return {
         "version": "v2.0",
         "last_step": {
-            "extrinsic_step":   last.get("extrinsic_step", 0.0),
-            "extrinsic_total":  last.get("extrinsic_total", 0.0),
-            "pbrs_shaping":     last.get("pbrs_shaping", 0.0),
-            "intrinsic_count":  last.get("intrinsic_count", 0.0),
-            "phi_before":       last.get("phi_before", 0.0),
-            "phi_after":        last.get("phi_after", 0.0),
+            "extrinsic_step": last.get("extrinsic_step", 0.0),
+            "extrinsic_total": last.get("extrinsic_total", 0.0),
+            "pbrs_shaping": last.get("pbrs_shaping", 0.0),
+            "intrinsic_count": last.get("intrinsic_count", 0.0),
+            "intrinsic_rnd": last.get("intrinsic_rnd", 0.0),
+            "weighted_judge": last.get("weighted_judge", 0.0),
+            "difference_reward": last.get("difference_reward", 0.0),
+            "difference_reward_raw": last.get("difference_reward_raw", 0.0),
+            "difference_baseline_tool": last.get("difference_baseline_tool", ""),
+            "difference_baseline_step_reward": last.get("difference_baseline_step_reward", 0.0),
+            "ird_posterior_correction": last.get("ird_posterior_correction", 0.0),
+            "ird_proxy_reward": last.get("ird_proxy_reward", 0.0),
+            "ird_posterior_expected_reward": last.get("ird_posterior_expected_reward", 0.0),
+            "ird_top_hypothesis": last.get("ird_top_hypothesis", ""),
+            "ird_posterior": last.get("ird_posterior", {}),
+            "phi_before": last.get("phi_before", 0.0),
+            "phi_after": last.get("phi_after", 0.0),
             "intrinsic_decay_factor": last.get("intrinsic_decay_factor", 1.0),
-            "total":            last.get("extrinsic_total", 0.0)
-                                + last.get("pbrs_shaping", 0.0)
-                                + last.get("intrinsic_count", 0.0),
+            "total": last.get(
+                "total",
+                last.get("extrinsic_total", 0.0)
+                + last.get("pbrs_shaping", 0.0)
+                + last.get("intrinsic_count", 0.0)
+                + last.get("intrinsic_rnd", 0.0)
+                + last.get("weighted_judge", 0.0)
+                + last.get("difference_reward", 0.0)
+                + last.get("ird_posterior_correction", 0.0),
+            ),
         },
         "config": {
-            "mode":         combiner.mode if combiner else "full",
-            "w_extrinsic":  combiner.w_extrinsic if combiner else 1.0,
-            "w_pbrs":       combiner.w_pbrs if combiner else 1.0,
-            "w_intrinsic":  combiner.w_intrinsic if combiner else 1.0,
-            "episode_idx":  intrinsic.episode_idx if intrinsic else 0,
+            "mode": combiner.mode if combiner else "full",
+            "w_extrinsic": combiner.w_extrinsic if combiner else 1.0,
+            "w_pbrs": combiner.w_pbrs if combiner else 1.0,
+            "w_intrinsic": combiner.w_intrinsic if combiner else 1.0,
+            "w_intrinsic_rnd": combiner.w_intrinsic_rnd if combiner else 1.0,
+            "w_judge": combiner.w_judge if combiner else 1.0,
+            "w_difference": combiner.w_difference if combiner else 0.0,
+            "w_ird": combiner.w_ird if combiner else 1.0,
+            "episode_idx": intrinsic.episode_idx if intrinsic else 0,
         },
     }
 
@@ -274,6 +297,39 @@ def diagnostics_set_mode(payload: dict):
         return {"ok": False, "error": f"unknown mode: {new_mode}"}
     combiner.mode = new_mode
     return {"ok": True, "mode": new_mode}
+
+
+@app.get("/metrics")
+def metrics():
+    """
+    Serve training metrics (sample complexity, reward components) if the
+    metrics file exists. Returns graceful fallback when absent.
+    """
+    candidates = [
+        Path(__file__).resolve().parents[1] / "training_metrics.json",
+        Path("training_metrics.json"),
+    ]
+    for path in candidates:
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return {
+                    "available": True,
+                    "episodes_to_threshold_0_5": data.get("episodes_to_threshold_0_5", -1),
+                    "episodes_to_threshold_1_0": data.get("episodes_to_threshold_1_0", -1),
+                    "pre_train_rewards": data.get("pre_train_rewards", {}),
+                    "post_train_rewards": data.get("post_train_rewards", {}),
+                    "reward_component_summary": data.get("reward_component_summary", {}),
+                    "total_eval_episodes": len(data.get("eval_rewards", [])),
+                    "total_grpo_steps": len(data.get("grpo_steps", [])),
+                }
+            except Exception:
+                pass
+    return {
+        "available": False,
+        "episodes_to_threshold_0_5": -1,
+        "episodes_to_threshold_1_0": -1,
+    }
 
 
 def main():

@@ -70,3 +70,6 @@ htmlcov/
 
 # Docker (optional local overrides)
 docker-compose.override.yml
+
+Update.txt
+Context.txt
