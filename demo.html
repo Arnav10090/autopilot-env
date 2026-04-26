@@ -456,6 +456,30 @@ main{
 .cbtn.rst{background:transparent;color:var(--t2);border:1px solid var(--b2)}
 .cbtn.rst:hover{color:var(--t1);border-color:var(--t2)}
 .cbtn:disabled{opacity:.3;cursor:not-allowed;box-shadow:none}
+.cbtn.mode-toggle{
+  background:transparent;border:1px solid var(--green);color:var(--green);
+  letter-spacing:.8px;padding:0 12px;font-size:8px;
+  transition:all .2s ease;
+}
+.cbtn.mode-toggle:hover{
+  background:rgba(0,230,118,.1);box-shadow:0 0 10px rgba(0,230,118,.2);
+}
+.cbtn.mode-toggle.ablation{
+  border-color:var(--amber);color:var(--amber);
+}
+.cbtn.mode-toggle.ablation:hover{
+  background:rgba(255,179,0,.1);box-shadow:0 0 10px rgba(255,179,0,.2);
+}
+.cbtn.mode-toggle .mode-dot{
+  width:6px;height:6px;border-radius:50%;flex-shrink:0;
+  background:var(--green);transition:background .2s;
+}
+.cbtn.mode-toggle.ablation .mode-dot{
+  background:var(--amber);animation:modePulse 1.5s ease infinite;
+}
+@keyframes modePulse{
+  0%,100%{opacity:1}50%{opacity:.4}
+}
 
 .c-div{width:1px;height:26px;background:var(--b2);flex-shrink:0;margin:0 2px}
 
@@ -1006,6 +1030,13 @@ input[type=range]::-webkit-slider-thumb{
     <span class="spd-val" id="spd-val">1×</span>
   </div>
 
+  <div class="c-div"></div>
+
+  <button class="cbtn mode-toggle" id="btn-mode" onclick="cycleRewardMode()" title="Live reward mode toggle — cycles through ablation configurations">
+    <span class="mode-dot"></span>
+    <span id="mode-label">MODE: FULL</span>
+  </button>
+
   <div class="c-spacer"></div>
 </div>
 
@@ -1099,6 +1130,64 @@ const API = 'https://arnav100904-adaptive-enterprise-autopilot.hf.space';
 let curTask = 'easy';
 let running = false;
 let stepDelay = 850;
+
+// ── REWARD MODE TOGGLE (Phase 10) ───────────────────────────────────────
+const REWARD_MODES = ['full', 'proxy_only', 'no_pbrs', 'no_intrinsic'];
+const REWARD_MODE_LABELS = {
+  full: 'FULL',
+  proxy_only: 'PROXY ONLY',
+  no_pbrs: 'NO PBRS',
+  no_intrinsic: 'NO INTRINSIC',
+};
+let _currentModeIdx = 0;
+let _currentMode = 'full';
+
+async function cycleRewardMode() {
+  _currentModeIdx = (_currentModeIdx + 1) % REWARD_MODES.length;
+  const nextMode = REWARD_MODES[_currentModeIdx];
+  const btn = document.getElementById('btn-mode');
+  const label = document.getElementById('mode-label');
+
+  // Optimistic UI update
+  label.textContent = `MODE: ${REWARD_MODE_LABELS[nextMode]}`;
+  const isAblation = nextMode !== 'full';
+  btn.classList.toggle('ablation', isAblation);
+
+  try {
+    const r = await fetch(`${API}/diagnostics/mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: nextMode }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok) {
+      _currentMode = data.mode;
+      addLog('sys', '⚙', `Reward mode switched → ${REWARD_MODE_LABELS[_currentMode]}`);
+    } else {
+      throw new Error(data.error || 'unknown error');
+    }
+  } catch (e) {
+    // Revert on failure
+    _currentModeIdx = REWARD_MODES.indexOf(_currentMode);
+    label.textContent = `MODE: ${REWARD_MODE_LABELS[_currentMode]}`;
+    btn.classList.toggle('ablation', _currentMode !== 'full');
+    addLog('warn', '⚠', `Mode switch failed: ${e.message}`);
+  }
+}
+
+function syncModeFromDiag(diag) {
+  if (!diag || !diag.config || !diag.config.mode) return;
+  const serverMode = diag.config.mode;
+  if (serverMode !== _currentMode && REWARD_MODES.includes(serverMode)) {
+    _currentMode = serverMode;
+    _currentModeIdx = REWARD_MODES.indexOf(serverMode);
+    const btn = document.getElementById('btn-mode');
+    const label = document.getElementById('mode-label');
+    if (label) label.textContent = `MODE: ${REWARD_MODE_LABELS[_currentMode]}`;
+    if (btn) btn.classList.toggle('ablation', _currentMode !== 'full');
+  }
+}
 let totalRew = 0, stepCount = 0;
 let EXTR_MAX = 5.0;     // extrinsic-grader ceiling for current episode (num_tasks * 1.0); refreshed on /reset
 const TYPICAL_TASKS = { easy: 5, medium: 9, hard: 13 };  // representative task counts per difficulty (from workflows.py)
@@ -1437,6 +1526,13 @@ function resetAll() {
   _firedIrdCard = false;
   _firedDecayCard = false;
   _firedSampleComplexityCard = false;
+  // Reset mode toggle to full on episode reset
+  _currentModeIdx = 0;
+  _currentMode = 'full';
+  const modeBtn = document.getElementById('btn-mode');
+  const modeLabel = document.getElementById('mode-label');
+  if (modeLabel) modeLabel.textContent = 'MODE: FULL';
+  if (modeBtn) modeBtn.classList.remove('ablation');
   enBtns();
   triggerStory('intro');
 }
@@ -1502,6 +1598,7 @@ async function runDemo(mode) {
       break;
     }
     const diag = await fetchDiagnostics();
+    syncModeFromDiag(diag);
     pushStackFrame(diag);
     fireConditionalStories(diag);
 
