@@ -1123,6 +1123,24 @@ const STORY = {
     body:'<b>proxy-only</b> vs <b>+PBRS</b> vs <b>+intrinsic</b> vs <b>full stack</b>. The bar chart in the README proves each addition contributes — anything that didn\'t was removed before submission.',
     border:'green-border', step:5,
   },
+  irdPosterior: {
+    phase:'ALIGNMENT · IRD POSTERIOR CORRECTION',
+    title:'PROXY REWARD GETS A SAFETY CHECK',
+    body:'When the proxy signal can miss intent, the env adds a lightweight <b>posterior correction</b>. This term estimates how much the true reward should differ from the proxy and nudges the trainer toward the corrected total.',
+    border:'purple-border', step:4,
+  },
+  sampleComplexity: {
+    phase:'EFFICIENCY · SAMPLE COMPLEXITY',
+    title:'HOW FAST DOES IT GET GOOD?',
+    body:'We track <b>episodes to reward thresholds</b> so judges can see not just final score, but how quickly the stack reaches useful behavior. Faster threshold crossing means lower sample complexity and less wasted training.',
+    border:'green-border', step:5,
+  },
+  intrinsicDecayed: {
+    phase:'EXPLORATION · BONUS FADES OUT',
+    title:'INTRINSIC REWARD STEPS ASIDE',
+    body:'The intrinsic bonus is temporary by design. Once the decay factor falls near zero, exploration stops dominating and the agent is paid mostly by the deterministic enterprise grader plus the bounded reward stack terms.',
+    border:'purple-border', step:5,
+  },
 };
 
 let curStoryStep = 0;
@@ -1211,6 +1229,9 @@ function renderStackCanvas() {
 
 let _firedPbrsCard = false;
 let _firedIntrCard = false;
+let _firedIrdCard = false;
+let _firedDecayCard = false;
+let _firedSampleComplexityCard = false;
 
 function fireConditionalStories(diag) {
   if (!diag || !diag.last_step) return;
@@ -1221,6 +1242,14 @@ function fireConditionalStories(diag) {
   if (!_firedIntrCard && diag.last_step.intrinsic_count > 1e-4) {
     _firedIntrCard = true;
     setTimeout(() => triggerStory('intrinsicNovel'), 1500);
+  }
+  if (!_firedIrdCard && Math.abs(Number(diag.last_step.ird_posterior_correction || 0)) > 1e-4) {
+    _firedIrdCard = true;
+    setTimeout(() => triggerStory('irdPosterior'), 900);
+  }
+  if (!_firedDecayCard && Number(diag.last_step.intrinsic_decay_factor ?? 1) < 0.05) {
+    _firedDecayCard = true;
+    setTimeout(() => triggerStory('intrinsicDecayed'), 1200);
   }
 }
 
@@ -1351,6 +1380,9 @@ function resetAll() {
   resetJudgeUi();
   _firedPbrsCard = false;
   _firedIntrCard = false;
+  _firedIrdCard = false;
+  _firedDecayCard = false;
+  _firedSampleComplexityCard = false;
   enBtns();
   triggerStory('intro');
 }
@@ -1803,6 +1835,10 @@ function showEp(rew, diff) {
 function closeEp() {
   document.getElementById('ep-ov').classList.remove('show');
   setTimeout(() => triggerStory('ablationProof'), 350);
+  if (!_firedSampleComplexityCard) {
+    _firedSampleComplexityCard = true;
+    setTimeout(() => triggerStory('sampleComplexity'), 2400);
+  }
 }
 function setText(id, t) { const el = document.getElementById(id); if (el) el.textContent = t; }
 function setDeltaCell(id, nv, ov) {
