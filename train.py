@@ -154,6 +154,8 @@ class TrainingMetrics:
     eval_tasks: List[str]     = field(default_factory=list)
     eval_phase: List[str]     = field(default_factory=list)
     difficulty: List[float]   = field(default_factory=list)
+    episodes_to_threshold_0_5: int = -1   # first episode where eval_reward >= 0.5
+    episodes_to_threshold_1_0: int = -1   # first episode where eval_reward >= 1.0
     pre_train_rewards: Dict[str, float]  = field(default_factory=dict)
     post_train_rewards: Dict[str, float] = field(default_factory=dict)
     _step: int = field(default=0, repr=False)
@@ -181,6 +183,15 @@ class TrainingMetrics:
         self.eval_tasks.append(task)
         self.eval_phase.append(phase)
         self.difficulty.append(round(diff, 4))
+
+        ep_idx = len(self.eval_rewards)
+        if self.episodes_to_threshold_0_5 < 0 and reward >= 0.5:
+            self.episodes_to_threshold_0_5 = ep_idx
+            print(f"[milestone] reached reward >= 0.5 in {ep_idx} eval episodes", flush=True)
+        if self.episodes_to_threshold_1_0 < 0 and reward >= 1.0:
+            self.episodes_to_threshold_1_0 = ep_idx
+            print(f"[milestone] reached reward >= 1.0 in {ep_idx} eval episodes", flush=True)
+
         print(
             f"[eval @ step {step}] phase={phase} task={task} "
             f"score={reward:.3f} difficulty={diff:.3f}",
@@ -196,6 +207,8 @@ class TrainingMetrics:
             "eval_tasks": self.eval_tasks,
             "eval_phase": self.eval_phase,
             "difficulty": self.difficulty,
+            "episodes_to_threshold_0_5": self.episodes_to_threshold_0_5,
+            "episodes_to_threshold_1_0": self.episodes_to_threshold_1_0,
             "pre_train_rewards": self.pre_train_rewards,
             "post_train_rewards": self.post_train_rewards,
         }
@@ -893,7 +906,15 @@ def main():
 
 # ── Plot ──────────────────────────────────────────────────────────────────────
 
-def plot_reward_curve(path: str = "training_metrics.json"):
+def plot_reward_curve(path: str = "training_metrics.json", include_curriculum: bool = False):
+    """
+    Render the training-progress chart.
+
+    Default (include_curriculum=False) emits a single-panel view of GRPO step
+    rewards + episode eval checkpoints, which is the version embedded in the
+    README. Pass include_curriculum=True (or `python train.py plot --full`) for
+    the 2-panel view that adds the T4 auto-curriculum difficulty trace.
+    """
     with open(path) as f:
         data = json.load(f)
 
@@ -913,7 +934,11 @@ def plot_reward_curve(path: str = "training_metrics.json"):
         import matplotlib.pyplot as plt
         import numpy as np
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 9))
+        if include_curriculum:
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 9))
+        else:
+            fig, ax1 = plt.subplots(1, 1, figsize=(15, 6))
+            ax2 = None
         fig.suptitle("Training Progress — Adaptive Enterprise Autopilot", fontsize=14, fontweight="bold")
 
         # ── Top chart ────────────────────────────────────────────────────────
@@ -980,7 +1005,7 @@ def plot_reward_curve(path: str = "training_metrics.json"):
         ax1.axhline(0, color="black", linewidth=0.5, alpha=0.4)
         if grpo_steps:
             ax1.set_xlim(-0.3, max(grpo_steps) + 0.3)
-            ax1.set_xticks(range(0, max(grpo_steps) + 1))
+            ax1.set_xticks(range(0, max(grpo_steps) + 1, 10))
         ax1.grid(alpha=0.3)
 
         all_rewards_no_outliers = [r for r in eval_rewards if r > -3]
@@ -989,54 +1014,57 @@ def plot_reward_curve(path: str = "training_metrics.json"):
             ymax = max(max(all_rewards_no_outliers), max(grpo_rewards)) + 0.5
             ax1.set_ylim(max(-3, ymin), ymax)
 
-        # ── Bottom chart ──────────────────────────────────────────────────────
+        # ── Bottom chart (only when curriculum panel requested) ───────────────
 
-        easy_diff_points = [
-            (s, d)
-            for s, d, t, phase in zip(eval_steps, difficulty, eval_tasks, eval_phase)
-            if t == "easy" and phase in ("pre", "train")
-        ]
-        if not easy_diff_points:
+        if ax2 is not None:
             easy_diff_points = [
-                (s, d) for s, d, t in zip(eval_steps, difficulty, eval_tasks) if t == "easy"
+                (s, d)
+                for s, d, t, phase in zip(eval_steps, difficulty, eval_tasks, eval_phase)
+                if t == "easy" and phase in ("pre", "train")
             ]
-        easy_diff_steps = [s for s, _ in easy_diff_points]
-        easy_diff_vals  = [d for _, d in easy_diff_points]
+            if not easy_diff_points:
+                easy_diff_points = [
+                    (s, d) for s, d, t in zip(eval_steps, difficulty, eval_tasks) if t == "easy"
+                ]
+            easy_diff_steps = [s for s, _ in easy_diff_points]
+            easy_diff_vals  = [d for _, d in easy_diff_points]
 
-        if easy_diff_steps:
-            ax2.plot(easy_diff_steps, easy_diff_vals, color="coral", linewidth=2.5,
-                    marker="o", markersize=7, label="Generated workflow difficulty (T4)")
-            ax2.fill_between(easy_diff_steps, easy_diff_vals, alpha=0.15, color="coral")
+            if easy_diff_steps:
+                ax2.plot(easy_diff_steps, easy_diff_vals, color="coral", linewidth=2.5,
+                        marker="o", markersize=7, label="Generated workflow difficulty (T4)")
+                ax2.fill_between(easy_diff_steps, easy_diff_vals, alpha=0.15, color="coral")
 
-            if len(set(round(d,2) for d in easy_diff_vals)) > 1:
-                for s, d in zip(easy_diff_steps, easy_diff_vals):
-                    if d > 0.15:
-                        ax2.annotate(f"{d:.2f}", (s, d), textcoords="offset points",
-                                    xytext=(2, 6), fontsize=8, color="darkred")
-            else:
-                ax2.text(
-                    0.5, 0.55,
-                    "Difficulty stable at 0.10\n(T4 escalation requires ≥50% task completion.\n"
-                    "Run 200+ episodes on A10G to see escalation.)",
-                    transform=ax2.transAxes, ha="center", fontsize=9,
-                    color="sienna",
-                    bbox=dict(boxstyle="round,pad=0.4", facecolor="#FFF3CD", edgecolor="goldenrod", alpha=0.8)
-                )
+                if len(set(round(d,2) for d in easy_diff_vals)) > 1:
+                    for s, d in zip(easy_diff_steps, easy_diff_vals):
+                        if d > 0.15:
+                            ax2.annotate(f"{d:.2f}", (s, d), textcoords="offset points",
+                                        xytext=(2, 6), fontsize=8, color="darkred")
+                else:
+                    ax2.text(
+                        0.5, 0.55,
+                        "Difficulty stable at 0.10\n(T4 escalation requires ≥50% task completion.\n"
+                        "Run 200+ episodes on A10G to see escalation.)",
+                        transform=ax2.transAxes, ha="center", fontsize=9,
+                        color="sienna",
+                        bbox=dict(boxstyle="round,pad=0.4", facecolor="#FFF3CD", edgecolor="goldenrod", alpha=0.8)
+                    )
 
-        ax2.set_ylim(0, 1.05)
-        ax2.set_ylabel("Difficulty score (0–1)", fontsize=11)
-        ax2.set_xlabel("Training step", fontsize=11)
-        ax2.set_title("T4 self-improvement — auto-generated workflow difficulty at each eval checkpoint", fontsize=10)
-        ax2.legend(
-            loc="center left",
-            bbox_to_anchor=(1.01, 0.5),
-            fontsize=9,
-            borderaxespad=0.0,
-        )
-        ax2.grid(alpha=0.3)
-        if easy_diff_steps:
-            ax2.set_xlim(-0.3, max(easy_diff_steps) + 0.3)
-            ax2.set_xticks(range(0, max(easy_diff_steps) + 1))
+            ax2.set_ylim(0, 1.05)
+            ax2.set_ylabel("Difficulty score (0–1)", fontsize=11)
+            ax2.set_xlabel("Training step", fontsize=11)
+            ax2.set_title("T4 self-improvement — auto-generated workflow difficulty at each eval checkpoint", fontsize=10)
+            ax2.legend(
+                loc="center left",
+                bbox_to_anchor=(1.01, 0.5),
+                fontsize=9,
+                borderaxespad=0.0,
+            )
+            ax2.grid(alpha=0.3)
+            if easy_diff_steps:
+                ax2.set_xlim(-0.3, max(easy_diff_steps) + 0.3)
+                ax2.set_xticks(range(0, max(easy_diff_steps) + 1, 10))
+        else:
+            ax1.set_xlabel("Training step", fontsize=11)
 
         plt.tight_layout(rect=[0, 0, 0.84, 0.96])
         plt.savefig("reward_curve.png", dpi=150, bbox_inches="tight")
@@ -1072,6 +1100,7 @@ def plot_reward_curve(path: str = "training_metrics.json"):
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "plot":
-        plot_reward_curve()
+        full = "--full" in sys.argv[2:]
+        plot_reward_curve(include_curriculum=full)
     else:
         main()

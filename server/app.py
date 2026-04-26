@@ -226,6 +226,56 @@ def workflow():
     return _env._workflow
 
 
+@app.get("/diagnostics")
+def diagnostics():
+    """
+    Live reward decomposition for the most recent step.
+
+    Frontend (demo.html) polls this once per /step response so judges can see
+    every term in the v2 reward stack contribute in real time.
+    """
+    env = _env
+    last = getattr(env, "_last_reward_breakdown", {}) or {}
+    combiner = getattr(env, "_reward_combiner", None)
+    intrinsic = getattr(env, "_intrinsic", None)
+    return {
+        "version": "v2.0",
+        "last_step": {
+            "extrinsic_step":   last.get("extrinsic_step", 0.0),
+            "extrinsic_total":  last.get("extrinsic_total", 0.0),
+            "pbrs_shaping":     last.get("pbrs_shaping", 0.0),
+            "intrinsic_count":  last.get("intrinsic_count", 0.0),
+            "phi_before":       last.get("phi_before", 0.0),
+            "phi_after":        last.get("phi_after", 0.0),
+            "intrinsic_decay_factor": last.get("intrinsic_decay_factor", 1.0),
+            "total":            last.get("extrinsic_total", 0.0)
+                                + last.get("pbrs_shaping", 0.0)
+                                + last.get("intrinsic_count", 0.0),
+        },
+        "config": {
+            "mode":         combiner.mode if combiner else "full",
+            "w_extrinsic":  combiner.w_extrinsic if combiner else 1.0,
+            "w_pbrs":       combiner.w_pbrs if combiner else 1.0,
+            "w_intrinsic":  combiner.w_intrinsic if combiner else 1.0,
+            "episode_idx":  intrinsic.episode_idx if intrinsic else 0,
+        },
+    }
+
+
+@app.post("/diagnostics/mode")
+def diagnostics_set_mode(payload: dict):
+    """Live ablation toggle: payload = {'mode': 'full'|'proxy_only'|'no_pbrs'|'no_intrinsic'}."""
+    env = _env
+    combiner = getattr(env, "_reward_combiner", None)
+    if combiner is None:
+        return {"ok": False, "error": "RewardCombiner not present"}
+    new_mode = (payload or {}).get("mode", "full")
+    if new_mode not in {"full", "proxy_only", "no_pbrs", "no_intrinsic"}:
+        return {"ok": False, "error": f"unknown mode: {new_mode}"}
+    combiner.mode = new_mode
+    return {"ok": True, "mode": new_mode}
+
+
 def main():
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "7860"))
