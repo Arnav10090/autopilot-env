@@ -533,7 +533,7 @@ input[type=range]::-webkit-slider-thumb{
 .ep-card{
   background:var(--surf);border:1px solid var(--b3);
   border-radius:14px;padding:36px 44px;text-align:center;
-  max-width:440px;width:90%;
+  max-width:560px;width:90%;
   animation:popIn .4s cubic-bezier(.34,1.56,.64,1);
 }
 @keyframes popIn{from{opacity:0;transform:scale(.8)}to{opacity:1;transform:scale(1)}}
@@ -581,6 +581,41 @@ input[type=range]::-webkit-slider-thumb{
   border:none;border-radius:6px;cursor:pointer;transition:all .15s;
 }
 .ep-continue:hover{filter:brightness(1.1)}
+.ep-ablation{
+  background:var(--bg);border:1px solid var(--b2);
+  border-left:3px solid var(--green);
+  border-radius:8px;padding:14px;margin-bottom:18px;text-align:left;
+}
+.ep-ablation-lbl{
+  font-family:var(--font-mono);font-size:8px;letter-spacing:1.5px;
+  color:var(--green);margin-bottom:10px;
+}
+.ep-ablation-grid{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:8px;
+}
+.ep-ablation-cell{
+  background:rgba(255,255,255,.02);border:1px solid var(--b1);
+  border-radius:8px;padding:10px 8px;text-align:center;
+}
+.ep-ablation-cell .k{
+  display:block;font-family:var(--font-mono);font-size:7px;letter-spacing:1px;color:var(--t3);margin-bottom:4px;
+}
+.ep-ablation-cell .v{
+  display:block;font-family:var(--font-mono);font-size:16px;font-weight:700;color:var(--t1);
+}
+.ep-ablation-cell.delta.pos .v{color:var(--green)}
+.ep-ablation-cell.delta.neg .v{color:var(--red)}
+.ep-ablation-note{
+  margin-top:10px;font-family:var(--font-mono);font-size:7.5px;letter-spacing:.4px;color:var(--t3);line-height:1.5;
+}
+.ep-ablation-link{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:100%;margin:0 0 12px;padding:10px 12px;
+  background:rgba(176,77,255,.14);border:1px solid rgba(176,77,255,.35);
+  border-radius:6px;color:var(--purple);text-decoration:none;
+  font-family:var(--font-mono);font-size:9px;font-weight:700;letter-spacing:1.4px;
+}
+.ep-ablation-link:hover{filter:brightness(1.1)}
 
 /* ═══════════════════════════════════════════════════
    TOOLTIP
@@ -992,6 +1027,24 @@ input[type=range]::-webkit-slider-thumb{
     <div class="ep-ttl" id="ep-ttl">EPISODE COMPLETE</div>
     <div class="ep-score" id="ep-score">2.00</div>
     <div class="ep-sub">TOTAL EPISODE REWARD</div>
+    <div class="ep-ablation">
+      <div class="ep-ablation-lbl">EPISODE ABLATION — WHAT DID REWARD ENGINEERING BUY?</div>
+      <div class="ep-ablation-grid">
+        <div class="ep-ablation-cell">
+          <span class="k">TOTAL</span>
+          <span class="v" id="ep-ab-total">0.00</span>
+        </div>
+        <div class="ep-ablation-cell">
+          <span class="k">WITHOUT V2 STACK</span>
+          <span class="v" id="ep-ab-proxy">0.00</span>
+        </div>
+        <div class="ep-ablation-cell delta" id="ep-ab-delta-cell">
+          <span class="k">DELTA</span>
+          <span class="v" id="ep-ab-delta">0.00</span>
+        </div>
+      </div>
+      <div class="ep-ablation-note" id="ep-ab-note">Proxy-only baseline is estimated client-side from accumulated extrinsic-only reward.</div>
+    </div>
     <div class="ep-t4">
       <div class="ep-t4-lbl" id="ep-t4-lbl">▲ T4 SELF-IMPROVEMENT — CURRICULUM AUTO-ESCALATING</div>
       <div class="ep-arrow-row">
@@ -1024,6 +1077,7 @@ input[type=range]::-webkit-slider-thumb{
       </div>
       <div class="ep-diff-news" id="ep-diff-news">—</div>
     </div>
+    <a class="ep-ablation-link" href="ablation_curve.png" target="_blank" rel="noopener">OPEN ABLATION CURVE</a>
     <button class="ep-continue" onclick="closeEp()">CONTINUE →</button>
   </div>
 </div>
@@ -1800,11 +1854,22 @@ function addLog(type, ic, txt) {
 // ── EPISODE OVERLAY ───────────────────────────────────────────────────────
 function showEp(rew, diff) {
   const ok = rew > 0.5;
+  const proxyOnly = stackHistory.reduce((sum, frame) => sum + Number(frame.extr || 0), 0);
+  const delta = rew - proxyOnly;
   document.getElementById('ep-ic').textContent = ok ? '✓' : '✗';
   document.getElementById('ep-ic').className = `ep-icon${ok?'':' fail'}`;
   document.getElementById('ep-ttl').textContent = ok ? 'EPISODE COMPLETE' : 'EPISODE FAILED';
   document.getElementById('ep-score').textContent = rew.toFixed(2);
   document.getElementById('ep-score').className = `ep-score${ok?'':' fail'}`;
+  document.getElementById('ep-ab-total').textContent = signed(rew);
+  document.getElementById('ep-ab-proxy').textContent = signed(proxyOnly);
+  document.getElementById('ep-ab-delta').textContent = signed(delta);
+  const deltaCell = document.getElementById('ep-ab-delta-cell');
+  deltaCell.classList.remove('pos', 'neg');
+  if (delta > 1e-6) deltaCell.classList.add('pos');
+  else if (delta < -1e-6) deltaCell.classList.add('neg');
+  document.getElementById('ep-ab-note').textContent =
+    `Proxy-only baseline estimated from ${stackHistory.length} step${stackHistory.length === 1 ? '' : 's'} of extrinsic-only reward.`;
   document.getElementById('ep-old').textContent = `DIFF ${diff}`;
   document.getElementById('ep-new').textContent = `DIFF ${Math.min(10, diff + (ok ? 1 : 0))}`;
 
