@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .grader import grade_step, grade_episode, resolve_task
 from .pbrs import potential as pbrs_potential, shaping_term, GAMMA as PBRS_GAMMA, PBRS_WEIGHT
 from .intrinsic import IntrinsicCounter, INTRINSIC_WEIGHT
-from .reward_combiner import RewardCombiner
+from .reward_combiner import RewardCombiner, RewardComponents
 from .judge_features import build_judge_input
 from .judge_types import JudgeExample
 from .models import AutopilotAction, AutopilotObservation, AutopilotState
@@ -228,23 +228,31 @@ class AutopilotEnvironment:
         )
 
         extrinsic_total = step_reward + episode_bonus + (self._judge_alpha * judge_score)
-        combined = self._reward_combiner.combine(
+        components = RewardComponents(
             extrinsic=extrinsic_total,
-            pbrs=pbrs_term,
-            intrinsic=intrinsic_term,
+            pbrs_shaping=pbrs_term,
+            intrinsic_count=intrinsic_term,
+        )
+        combined = self._reward_combiner.combine(
+            components=components,
         )
 
-        breakdown["pbrs_shaping"]    = round(combined["pbrs_shaping"], 4)
+        breakdown["pbrs_shaping"] = round(combined["pbrs_shaping"], 4)
         breakdown["intrinsic_count"] = round(combined["intrinsic_count"], 4)
-        breakdown["extrinsic_step"]  = round(step_reward, 4)
+        breakdown["intrinsic_rnd"] = round(combined["intrinsic_rnd"], 4)
+        breakdown["weighted_judge"] = round(combined["weighted_judge"], 4)
+        breakdown["difference_reward"] = round(combined["difference_reward"], 4)
+        breakdown["ird_posterior_correction"] = round(combined["ird_posterior_correction"], 4)
+        breakdown["extrinsic_step"] = round(step_reward, 4)
         breakdown["extrinsic_total"] = round(extrinsic_total, 4)
-        breakdown["phi_before"]      = round(phi_before, 4)
-        breakdown["phi_after"]       = round(phi_after, 4)
+        breakdown["phi_before"] = round(phi_before, 4)
+        breakdown["phi_after"] = round(phi_after, 4)
         breakdown["intrinsic_decay_factor"] = round(self._intrinsic.decay_factor(), 4)
-        breakdown["intrinsic_episode_idx"]  = self._intrinsic.episode_idx
-        breakdown["reward_combiner_mode"]   = self._reward_combiner.mode
+        breakdown["intrinsic_episode_idx"] = self._intrinsic.episode_idx
+        breakdown["reward_combiner_mode"] = self._reward_combiner.mode
 
         total_step_reward = round(combined["total"], 4)
+        breakdown["total"] = total_step_reward
         self._state.total_reward += total_step_reward
         self._last_reward_breakdown = dict(breakdown)
 

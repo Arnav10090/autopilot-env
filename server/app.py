@@ -241,23 +241,34 @@ def diagnostics():
     return {
         "version": "v2.0",
         "last_step": {
-            "extrinsic_step":   last.get("extrinsic_step", 0.0),
-            "extrinsic_total":  last.get("extrinsic_total", 0.0),
-            "pbrs_shaping":     last.get("pbrs_shaping", 0.0),
-            "intrinsic_count":  last.get("intrinsic_count", 0.0),
-            "phi_before":       last.get("phi_before", 0.0),
-            "phi_after":        last.get("phi_after", 0.0),
+            "extrinsic_step": last.get("extrinsic_step", 0.0),
+            "extrinsic_total": last.get("extrinsic_total", 0.0),
+            "pbrs_shaping": last.get("pbrs_shaping", 0.0),
+            "intrinsic_count": last.get("intrinsic_count", 0.0),
+            "intrinsic_rnd": last.get("intrinsic_rnd", 0.0),
+            "weighted_judge": last.get("weighted_judge", 0.0),
+            "difference_reward": last.get("difference_reward", 0.0),
+            "ird_posterior_correction": last.get("ird_posterior_correction", 0.0),
+            "phi_before": last.get("phi_before", 0.0),
+            "phi_after": last.get("phi_after", 0.0),
             "intrinsic_decay_factor": last.get("intrinsic_decay_factor", 1.0),
-            "total":            last.get("extrinsic_total", 0.0)
-                                + last.get("pbrs_shaping", 0.0)
-                                + last.get("intrinsic_count", 0.0),
+            "total": last.get(
+                "total",
+                last.get("extrinsic_total", 0.0)
+                + last.get("pbrs_shaping", 0.0)
+                + last.get("intrinsic_count", 0.0),
+            ),
         },
         "config": {
-            "mode":         combiner.mode if combiner else "full",
-            "w_extrinsic":  combiner.w_extrinsic if combiner else 1.0,
-            "w_pbrs":       combiner.w_pbrs if combiner else 1.0,
-            "w_intrinsic":  combiner.w_intrinsic if combiner else 1.0,
-            "episode_idx":  intrinsic.episode_idx if intrinsic else 0,
+            "mode": combiner.mode if combiner else "full",
+            "w_extrinsic": combiner.w_extrinsic if combiner else 1.0,
+            "w_pbrs": combiner.w_pbrs if combiner else 1.0,
+            "w_intrinsic": combiner.w_intrinsic if combiner else 1.0,
+            "w_intrinsic_rnd": combiner.w_intrinsic_rnd if combiner else 1.0,
+            "w_judge": combiner.w_judge if combiner else 1.0,
+            "w_difference": combiner.w_difference if combiner else 1.0,
+            "w_ird": combiner.w_ird if combiner else 1.0,
+            "episode_idx": intrinsic.episode_idx if intrinsic else 0,
         },
     }
 
