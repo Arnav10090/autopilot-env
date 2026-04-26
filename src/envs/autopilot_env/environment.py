@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .grader import grade_step, grade_episode, resolve_task
 from .difference_rewards import compute_difference_reward
+from .ird import IRDPosterior
 from .pbrs import potential as pbrs_potential, shaping_term, GAMMA as PBRS_GAMMA, PBRS_WEIGHT
 from .intrinsic import IntrinsicCounter, INTRINSIC_WEIGHT
 from .reward_combiner import RewardCombiner, RewardComponents
@@ -63,6 +64,7 @@ class AutopilotEnvironment:
         self._judge_enabled = bool(judge_enabled)
         self._judge_buffer = judge_buffer
         self._intrinsic = IntrinsicCounter()
+        self._ird = IRDPosterior()
         self._reward_combiner = RewardCombiner()
         self._last_reward_breakdown: Dict[str, Any] = {}
         self._current_episode_judge_examples: List[JudgeExample] = []
@@ -152,6 +154,8 @@ class AutopilotEnvironment:
 
         available_ids = self._available_task_ids()
         pending_ids = self._pending_task_ids()
+        completed_before = len(self._completed_ids)
+        available_before = len(available_ids)
 
         if self._judge_enabled and self._learned_judge is not None:
             judge_input = build_judge_input(
@@ -231,6 +235,21 @@ class AutopilotEnvironment:
         phi_before = float(breakdown.get("_phi_before", 0.0))
         phi_after = pbrs_potential(self._workflow, self._completed_ids)
         pbrs_term = shaping_term(phi_before, phi_after, gamma=PBRS_GAMMA)
+        completed_after = len(self._completed_ids)
+        available_after = len(self._available_task_ids())
+        proxy_reward = step_reward + episode_bonus
+        ird_term, ird_meta = self._ird.correction(
+            proxy_reward=proxy_reward,
+            step_breakdown=breakdown,
+            action_tool=action.tool or "",
+            total_tasks=len(self._workflow["tasks"]),
+            completed_before=completed_before,
+            completed_after=completed_after,
+            available_before=available_before,
+            available_after=available_after,
+            episode_done=done,
+            episode_success=all_done,
+        )
 
         intrinsic_term = self._intrinsic.bonus(
             workflow_id=self._workflow.get("workflow_id", ""),
@@ -244,6 +263,7 @@ class AutopilotEnvironment:
             pbrs_shaping=pbrs_term,
             intrinsic_count=intrinsic_term,
             difference_reward=difference_raw,
+            ird_posterior_correction=ird_term,
         )
         combined = self._reward_combiner.combine(
             components=components,
@@ -255,6 +275,10 @@ class AutopilotEnvironment:
         breakdown["weighted_judge"] = round(combined["weighted_judge"], 4)
         breakdown["difference_reward"] = round(combined["difference_reward"], 4)
         breakdown["ird_posterior_correction"] = round(combined["ird_posterior_correction"], 4)
+        breakdown["ird_proxy_reward"] = ird_meta["proxy_reward"]
+        breakdown["ird_posterior_expected_reward"] = ird_meta["posterior_expected_reward"]
+        breakdown["ird_top_hypothesis"] = ird_meta["top_hypothesis"]
+        breakdown["ird_posterior"] = dict(ird_meta["posterior"])
         breakdown["extrinsic_step"] = round(step_reward, 4)
         breakdown["extrinsic_total"] = round(extrinsic_total, 4)
         breakdown["phi_before"] = round(phi_before, 4)
