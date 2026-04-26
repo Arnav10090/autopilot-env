@@ -258,12 +258,14 @@ class AutopilotEnvironment:
             tool=action.tool or "",
         )
 
-        extrinsic_total = step_reward + episode_bonus + (self._judge_alpha * judge_score)
+        weighted_judge = self._judge_alpha * judge_score
+        extrinsic_total = step_reward + episode_bonus
         components = RewardComponents(
             extrinsic=extrinsic_total,
             pbrs_shaping=pbrs_term,
             intrinsic_count=intrinsic_terms.count_bonus,
             intrinsic_rnd=intrinsic_terms.rnd_bonus,
+            weighted_judge=weighted_judge,
             difference_reward=difference_raw,
             ird_posterior_correction=ird_term,
         )
