@@ -44,7 +44,7 @@ class RewardCombiner:
     w_intrinsic: float      = 1.0
     w_intrinsic_rnd: float  = 1.0
     w_judge: float          = 1.0
-    w_difference: float     = 1.0
+    w_difference: float     = 0.0
     w_ird: float            = 1.0
 
     def _gates(self) -> Dict[str, float]:

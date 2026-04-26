@@ -16,6 +16,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from .grader import grade_step, grade_episode, resolve_task
+from .difference_rewards import compute_difference_reward
 from .pbrs import potential as pbrs_potential, shaping_term, GAMMA as PBRS_GAMMA, PBRS_WEIGHT
 from .intrinsic import IntrinsicCounter, INTRINSIC_WEIGHT
 from .reward_combiner import RewardCombiner, RewardComponents
@@ -134,7 +135,17 @@ class AutopilotEnvironment:
             self._completed_ids,
             self._tools.summary(),
         )
+        difference_raw, difference_meta = compute_difference_reward(
+            action,
+            self._workflow,
+            self._completed_ids,
+            self._tools.summary(),
+            actual_step_reward=step_reward,
+        )
         breakdown["_phi_before"] = _phi_before
+        breakdown["difference_reward_raw"] = difference_raw
+        breakdown["difference_baseline_tool"] = difference_meta["baseline_tool"]
+        breakdown["difference_baseline_step_reward"] = difference_meta["baseline_step_reward"]
         judge_input = None
         judge_prediction = None
         judge_score = 0.0
@@ -232,6 +243,7 @@ class AutopilotEnvironment:
             extrinsic=extrinsic_total,
             pbrs_shaping=pbrs_term,
             intrinsic_count=intrinsic_term,
+            difference_reward=difference_raw,
         )
         combined = self._reward_combiner.combine(
             components=components,
