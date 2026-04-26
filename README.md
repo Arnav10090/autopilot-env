@@ -28,7 +28,7 @@ license: mit
 
 ---
 ## Prior work
-Round 1 submission: [Customer Support Triage](https://huggingface.co/spaces/Arnav100904/customer-support-triage) — single-agent triage environment, 96.2% baseline score.
+Round 1 submission: [Customer Support Triage](https://huggingface.co/spaces/Arnav100904/customer-support-triage) — single-agent triage environment, 96.2% baseline score
 
 ---
 
