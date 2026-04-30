@@ -626,7 +626,7 @@ Phase 3: Post-training evaluation
 
 ```bash
 # Colab (free T4 GPU, ~2 hours for 200 episodes)
-pip install --force-reinstall --no-cache-dir \
+pip install --upgrade --prefer-binary \
   "huggingface-hub>=0.34,<1.0" \
   "transformers>=4.56,<5" \
   "trl>=0.24,<1" \
