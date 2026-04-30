@@ -23,7 +23,7 @@ authors:
 **Quick Links:**
 - 🎮 **[Live Interactive Demo](https://huggingface.co/spaces/Arnav100904/adaptive-enterprise-autopilot)**
 - 💻 **[GitHub Repository](https://github.com/Arnav10090/autopilot-env)**
-- 📓 **[Training Notebook (Colab)](train_colab.ipynb)**
+- 📓 **[Training Notebook (Colab)](train_collab.ipynb)**
 
 ---
 

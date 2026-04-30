@@ -1,3 +1,13 @@
+---
+title: Adaptive Enterprise Autopilot
+emoji: 🤖
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_file: server/app.py
+pinned: false
+---
+
 <div align="center">
 
 # 🤖 Adaptive Enterprise Autopilot
@@ -5,6 +15,8 @@
 ### *The only OpenEnv environment with a reward function you can formally prove is correct.*
 
 <br/>
+
+
 
 [![OpenEnv](https://img.shields.io/badge/OpenEnv-compliant-4A90D9?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHJ4PSIzIiBmaWxsPSIjNEE5MEQ5Ii8+PHBhdGggZD0iTTQgOGw0IDQgNC04IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIGZpbGw9Im5vbmUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvc3ZnPg==)](https://github.com/meta-pytorch/OpenEnv)
 [![Themes](https://img.shields.io/badge/Themes-T2_%7C_T3.1_%7C_T4-7C3AED?style=for-the-badge)](#themes)
@@ -39,9 +51,9 @@
 | ✅ Uses OpenEnv (latest release) | **Done** | `openenv.yaml` · `server/app.py` |
 | ✅ Training script using Unsloth/HF TRL (Colab) | **Done** | [`train_colab.ipynb`](train_colab.ipynb) |
 | ✅ Training evidence — reward curves | **Done** | [`reward_curve.png`](reward_curve.png) |
-| ✅ Mini-blog on HuggingFace | **Done** | [HF Blog Post](https://huggingface.co/blog/Arnav100904/adaptive-enterprise-autopilot) |
+| ✅ Mini-blog on HuggingFace | **Done** | [HF Blog Post](https://huggingface.co/spaces/Arnav100904/adaptive-enterprise-autopilot/blob/main/Blog.md) |
 | ✅ Environment on Hugging Face Spaces | **Done** | [HF Space](https://huggingface.co/spaces/Arnav100904/adaptive-enterprise-autopilot) |
-| ✅ README with motivation, env explanation, results | **This file** | — |
+| ✅ README with motivation, env explanation, results | **Done** | [README.md](https://huggingface.co/spaces/Arnav100904/adaptive-enterprise-autopilot/blob/main/README.md) |
 
 ---
 

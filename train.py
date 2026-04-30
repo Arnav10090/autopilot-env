@@ -795,7 +795,8 @@ def make_callback(get_model_fn):
                             print(f"[callback eval error] {e}", flush=True)
 
         return MetricsCallback()
-    except ImportError:
+    except Exception as _ue:
+        print(f"[train] unsloth unavailable ({type(_ue).__name__}: {_ue}) — falling back to standard transformers.", flush=True)
         return None
 
 
@@ -910,18 +911,19 @@ def main():
         )
 
     # Phase 1 — SFT warmup
-    print("\n[train] === PHASE 1: SFT warmup ===", flush=True)
-    warmup = build_warmup_dataset()
-    sft_ds = Dataset.from_list([{
-        "text": f"<|system|>\n{e['system']}<|end|>\n<|user|>\n{e['user']}<|end|>\n<|assistant|>\n{e['assistant']}<|end|>"
-    } for e in warmup])
-    FastLanguageModel.for_training(model)
-    SFTTrainer(model=model, tokenizer=tokenizer, train_dataset=sft_ds,
-               dataset_text_field="text",
-               args=SFTConfig(per_device_train_batch_size=1, num_train_epochs=5,
-                              max_seq_length=MAX_SEQ_LEN, output_dir="./sft_warmup",
-                              logging_steps=1, save_strategy="no", report_to="none")).train()
-    print("[train] SFT warmup done.", flush=True)
+print("\n[train] === PHASE 1: SFT warmup ===", flush=True)
+warmup = build_warmup_dataset()
+sft_ds = Dataset.from_list([{
+    "text": f"<|system|>\n{e['system']}<|end|>\n<|user|>\n{e['user']}<|end|>\n<|assistant|>\n{e['assistant']}<|end|>"
+} for e in warmup])
+_set_training(model)
+SFTTrainer(model=model, tokenizer=tokenizer, train_dataset=sft_ds,
+           dataset_text_field="text",
+           args=SFTConfig(per_device_train_batch_size=1, num_train_epochs=5,
+                          max_seq_length=MAX_SEQ_LEN, output_dir="./sft_warmup",
+                          logging_steps=1, save_strategy="no", report_to="none",
+                          no_cuda=not _cuda, fp16=False, bf16=False)).train()
+print("[train] SFT warmup done.", flush=True)
 
     # Phase 2 — GRPO
     print("\n[train] === PHASE 2: GRPO training ===", flush=True)
@@ -965,6 +967,9 @@ def main():
         "save_steps": 50,
         "report_to": "none",
         "remove_unused_columns": False,
+        "no_cuda": not _cuda,
+        "fp16": False,
+        "bf16": False,
     }
     grpo_config_params = inspect.signature(GRPOConfig).parameters
     if "beta" in grpo_config_params:
