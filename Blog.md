@@ -554,8 +554,21 @@ cd autopilot-env
 # Local server
 python -m uvicorn server.app:app --host 0.0.0.0 --port 7860
 
-# Train from scratch (~2 hours on A10G, smoke-test in 20 min on T4)
-pip install unsloth trl transformers accelerate peft datasets
+# Install text-training stack
+pip uninstall -y torchvision
+pip install --upgrade --prefer-binary --no-deps \
+  "huggingface-hub==0.36.0" \
+  "transformers==4.56.2" \
+  "trl==0.24.0" \
+  "accelerate==1.10.1" \
+  "peft==0.17.1" \
+  "datasets==4.3.0" \
+  "mergekit==0.1.4"
+
+# CPU smoke test
+FORCE_CPU=1 NUM_EPISODES=5 TASKS=easy python train.py
+
+# Full GPU training run
 NUM_EPISODES=200 python train.py
 
 # Plot training curve
