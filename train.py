@@ -33,8 +33,9 @@ Run on Colab (free T4 / A10G):
     pip install unsloth trl transformers accelerate peft datasets
     python train.py
 
-For quick smoke-test without unsloth (just plots):
-    python train.py plot
+Run on CPU (slower, uses CPU_BASE_MODEL by default):
+    pip install trl transformers accelerate peft datasets torch
+    FORCE_CPU=1 NUM_EPISODES=20 python train.py
 """
 
 from __future__ import annotations
@@ -51,6 +52,9 @@ from typing import Any, Dict, List, Optional, Tuple
 # ── Config ────────────────────────────────────────────────────────────────────
 
 BASE_MODEL   = os.getenv("BASE_MODEL",   "unsloth/Qwen2.5-7B-Instruct")
+CPU_BASE_MODEL = os.getenv("CPU_BASE_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+FORCE_CPU    = os.getenv("FORCE_CPU", "0") == "1"
+USE_UNSLOTH  = os.getenv("USE_UNSLOTH", "1") == "1"
 HF_TOKEN     = os.getenv("HF_TOKEN",     "")
 PUSH_TO_HUB  = os.getenv("PUSH_TO_HUB", "0") == "1"
 HUB_REPO     = os.getenv("HUB_REPO",    "your-user/autopilot-agent")
@@ -844,6 +848,7 @@ def build_warmup_dataset():
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+LEGACY_MAIN_DISABLED = r'''
 def main():
     print(f"[train] model={BASE_MODEL}  tasks={TASKS}  episodes={NUM_EPISODES}  eval_every={EVAL_EVERY}")
     try:
@@ -1031,6 +1036,417 @@ print("[train] SFT warmup done.", flush=True)
 
 
 # ── Plot ──────────────────────────────────────────────────────────────────────
+
+'''
+
+LORA_TARGET_MODULES = [
+    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+]
+
+
+def _accepts_var_kwargs(callable_obj) -> bool:
+    return any(
+        p.kind == inspect.Parameter.VAR_KEYWORD
+        for p in inspect.signature(callable_obj).parameters.values()
+    )
+
+
+def _filter_kwargs(callable_obj, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    if _accepts_var_kwargs(callable_obj):
+        return dict(kwargs)
+    params = inspect.signature(callable_obj).parameters
+    return {k: v for k, v in kwargs.items() if k in params}
+
+
+def _with_device_training_args(config_cls, kwargs: Dict[str, Any], cuda: bool) -> Dict[str, Any]:
+    config_kwargs = dict(kwargs)
+    params = inspect.signature(config_cls).parameters
+    if "use_cpu" in params:
+        config_kwargs["use_cpu"] = not cuda
+    elif "no_cuda" in params:
+        config_kwargs["no_cuda"] = not cuda
+    if "fp16" in params:
+        config_kwargs["fp16"] = False
+    if "bf16" in params:
+        config_kwargs["bf16"] = False
+    return _filter_kwargs(config_cls, config_kwargs)
+
+
+def _resolve_model_name(cuda: bool) -> str:
+    if cuda:
+        return BASE_MODEL
+    if BASE_MODEL.startswith("unsloth/"):
+        print(
+            f"[train] CPU detected; using CPU_BASE_MODEL={CPU_BASE_MODEL} "
+            f"instead of GPU-only {BASE_MODEL}.",
+            flush=True,
+        )
+        return CPU_BASE_MODEL
+    return BASE_MODEL
+
+
+def _model_device(model):
+    try:
+        return next(model.parameters()).device
+    except StopIteration:
+        import torch
+        return torch.device("cpu")
+
+
+def _ensure_tokenizer_padding(tokenizer, model=None):
+    if getattr(tokenizer, "pad_token", None) is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    if model is not None and getattr(model, "config", None) is not None:
+        model.config.pad_token_id = tokenizer.pad_token_id
+
+
+def _format_chat_prompt(tokenizer, prompt: str) -> str:
+    msgs = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+    if hasattr(tokenizer, "apply_chat_template"):
+        try:
+            return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+        except Exception:
+            pass
+    return f"System:\n{SYSTEM_PROMPT}\n\nUser:\n{prompt}\n\nAssistant:\n"
+
+
+def _format_warmup_text(tokenizer, example: Dict[str, str]) -> str:
+    msgs = [
+        {"role": "system", "content": example["system"]},
+        {"role": "user", "content": example["user"]},
+        {"role": "assistant", "content": example["assistant"]},
+    ]
+    if hasattr(tokenizer, "apply_chat_template"):
+        try:
+            return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
+        except Exception:
+            pass
+    return (
+        f"System:\n{example['system']}\n\n"
+        f"User:\n{example['user']}\n\n"
+        f"Assistant:\n{example['assistant']}"
+    )
+
+
+def _load_transformers_model(torch, model_name: str, cuda: bool):
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    device = torch.device("cuda" if cuda else "cpu")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        token=HF_TOKEN or None,
+        trust_remote_code=True,
+    )
+
+    model_kwargs = {
+        "token": HF_TOKEN or None,
+        "trust_remote_code": True,
+        "torch_dtype": torch.float16 if cuda else torch.float32,
+    }
+    if not cuda:
+        model_kwargs["low_cpu_mem_usage"] = True
+
+    model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+    model.to(device)
+    _ensure_tokenizer_padding(tokenizer, model)
+
+    if hasattr(model, "config"):
+        model.config.use_cache = False
+
+    lora_config = LoraConfig(
+        r=LORA_RANK,
+        lora_alpha=LORA_RANK * 2,
+        target_modules=LORA_TARGET_MODULES,
+        lora_dropout=0.0,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+    try:
+        model = get_peft_model(model, lora_config)
+        if hasattr(model, "print_trainable_parameters"):
+            model.print_trainable_parameters()
+    except ValueError as exc:
+        print(f"[train] PEFT LoRA skipped ({exc}); training the base model directly.", flush=True)
+
+    return model, tokenizer
+
+
+def _trainer_kwargs(trainer_cls, tokenizer, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    trainer_kwargs = _filter_kwargs(trainer_cls, kwargs)
+    params = inspect.signature(trainer_cls).parameters
+    if "tokenizer" in params:
+        trainer_kwargs["tokenizer"] = tokenizer
+    elif "processing_class" in params:
+        trainer_kwargs["processing_class"] = tokenizer
+    return trainer_kwargs
+
+
+def main():
+    try:
+        import torch
+        from datasets import Dataset
+        from trl import GRPOConfig, GRPOTrainer, SFTConfig, SFTTrainer
+    except ImportError as e:
+        print(f"[ERROR] {e}\nRun: pip install trl transformers accelerate peft datasets torch")
+        sys.exit(1)
+
+    cuda = bool(torch.cuda.is_available()) and not FORCE_CPU
+    resolved_model = _resolve_model_name(cuda)
+    print(
+        f"[train] model={resolved_model}  backend={'cuda' if cuda else 'cpu'}  "
+        f"tasks={TASKS}  episodes={NUM_EPISODES}  eval_every={EVAL_EVERY}",
+        flush=True,
+    )
+
+    fast_language_model = None
+    use_unsloth_backend = cuda and USE_UNSLOTH
+    if use_unsloth_backend:
+        try:
+            from unsloth import FastLanguageModel
+            fast_language_model = FastLanguageModel
+        except Exception as exc:
+            use_unsloth_backend = False
+            print(
+                f"[train] Unsloth unavailable ({type(exc).__name__}: {exc}); "
+                "falling back to Transformers + PEFT.",
+                flush=True,
+            )
+
+    print("[train] Loading model...", flush=True)
+    if use_unsloth_backend:
+        model, tokenizer = fast_language_model.from_pretrained(
+            model_name=resolved_model,
+            max_seq_length=MAX_SEQ_LEN,
+            dtype=None,
+            load_in_4bit=True,
+            token=HF_TOKEN or None,
+        )
+        _ensure_tokenizer_padding(tokenizer, model)
+        model = fast_language_model.get_peft_model(
+            model,
+            r=LORA_RANK,
+            target_modules=LORA_TARGET_MODULES,
+            lora_alpha=LORA_RANK * 2,
+            lora_dropout=0.0,
+            bias="none",
+            use_gradient_checkpointing="unsloth",
+            random_state=42,
+        )
+
+        def set_inference():
+            fast_language_model.for_inference(model)
+
+        def set_training():
+            fast_language_model.for_training(model)
+
+    else:
+        model, tokenizer = _load_transformers_model(torch, resolved_model, cuda)
+
+        def set_inference():
+            model.eval()
+
+        def set_training():
+            model.train()
+
+    def model_fn(prompt: str) -> str:
+        set_inference()
+        text = _format_chat_prompt(tokenizer, prompt)
+        inputs = tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=MAX_SEQ_LEN,
+        ).to(_model_device(model))
+        try:
+            with torch.no_grad():
+                out = model.generate(
+                    **inputs,
+                    max_new_tokens=512,
+                    temperature=0.2,
+                    do_sample=True,
+                    pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                )
+            return tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+        finally:
+            set_training()
+
+    judge_buffer = None
+    learned_judge = None
+    if USE_LEARNED_JUDGE:
+        sys.path.insert(0, "src")
+        from envs.autopilot_env.judge_buffer import JudgeReplayBuffer
+        from envs.autopilot_env.judge_model import LearnedJudge
+
+        judge_buffer = JudgeReplayBuffer()
+        learned_judge = LearnedJudge(
+            model_path=JUDGE_MODEL_PATH,
+            enabled=True,
+        ).load()
+
+    # Phase 0 - baseline
+    print("\n[train] === PHASE 0: Pre-training baseline ===", flush=True)
+    for task in TASKS:
+        r = run_episode(
+            model_fn,
+            task,
+            judge_buffer=judge_buffer,
+            learned_judge=learned_judge,
+            judge_enabled=USE_LEARNED_JUDGE,
+        )
+        metrics.pre_train_rewards[task] = r["total_reward"]
+        metrics.record_eval(
+            0,
+            task,
+            r["total_reward"],
+            r["difficulty"],
+            phase="pre",
+            components=r.get("reward_components"),
+        )
+
+    # Phase 1 - SFT warmup
+    print("\n[train] === PHASE 1: SFT warmup ===", flush=True)
+    warmup = build_warmup_dataset()
+    sft_ds = Dataset.from_list([{"text": _format_warmup_text(tokenizer, e)} for e in warmup])
+    set_training()
+    sft_config_kwargs = _with_device_training_args(
+        SFTConfig,
+        {
+            "per_device_train_batch_size": 1,
+            "num_train_epochs": 5,
+            "max_seq_length": MAX_SEQ_LEN,
+            "output_dir": "./sft_warmup",
+            "logging_steps": 1,
+            "save_strategy": "no",
+            "report_to": "none",
+            "dataset_text_field": "text",
+        },
+        cuda,
+    )
+    sft_trainer_kwargs = _trainer_kwargs(
+        SFTTrainer,
+        tokenizer,
+        {
+            "model": model,
+            "train_dataset": sft_ds,
+            "dataset_text_field": "text",
+            "args": SFTConfig(**sft_config_kwargs),
+        },
+    )
+    SFTTrainer(**sft_trainer_kwargs).train()
+    print("[train] SFT warmup done.", flush=True)
+
+    # Phase 2 - GRPO
+    print("\n[train] === PHASE 2: GRPO training ===", flush=True)
+    sys.path.insert(0, "src")
+    from envs.autopilot_env.workflows import TASK_WORKFLOWS
+
+    prompts = []
+    for task in TASKS:
+        for wf in TASK_WORKFLOWS[task]:
+            for i in range(min(3, len(wf["tasks"]))):
+                completed = [t["task_id"] for t in wf["tasks"][:i]]
+                available = [
+                    t["task_id"] for t in wf["tasks"]
+                    if t["task_id"] not in completed
+                    and all(d in completed for d in t.get("dependencies", []))
+                ]
+                pending = [
+                    t["task_id"] for t in wf["tasks"]
+                    if t["task_id"] not in completed and t["task_id"] not in available
+                ]
+                user_prompt = _build_workflow_prompt(
+                    workflow_name=wf["name"],
+                    workflow_description=wf["description"],
+                    tasks=wf["tasks"],
+                    completed=completed,
+                    available=available,
+                    pending=pending,
+                )
+                prompts.append({"prompt": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ]})
+
+    runtime_grpo_k = GRPO_K if cuda else min(GRPO_K, 2)
+    runtime_batch_size = BATCH_SIZE if cuda else max(1, runtime_grpo_k)
+    grpo_kwargs = {
+        "per_device_train_batch_size": runtime_batch_size,
+        "gradient_accumulation_steps": GRAD_ACCUM,
+        "learning_rate": LR,
+        "num_train_epochs": max(1, NUM_EPISODES // len(prompts)),
+        "max_completion_length": 512,
+        "num_generations": runtime_grpo_k,
+        "output_dir": "./grpo_output",
+        "logging_steps": 5,
+        "save_steps": 50,
+        "report_to": "none",
+        "remove_unused_columns": False,
+    }
+    grpo_config_params = inspect.signature(GRPOConfig).parameters
+    if "beta" in grpo_config_params:
+        grpo_kwargs["beta"] = 0.02
+    elif "kl_coeff" in grpo_config_params:
+        grpo_kwargs["kl_coeff"] = 0.02
+    grpo_kwargs = _with_device_training_args(GRPOConfig, grpo_kwargs, cuda)
+
+    make_callback._judge_buffer = judge_buffer
+    make_callback._learned_judge = learned_judge
+    make_callback._judge_enabled = USE_LEARNED_JUDGE
+    callback = make_callback(lambda: model_fn)
+    grpo_trainer_kwargs = _trainer_kwargs(
+        GRPOTrainer,
+        tokenizer,
+        {
+            "model": model,
+            "reward_funcs": grpo_reward_fn,
+            "args": GRPOConfig(**grpo_kwargs),
+            "train_dataset": Dataset.from_list(prompts),
+            "callbacks": [callback] if callback else None,
+        },
+    )
+    GRPOTrainer(**grpo_trainer_kwargs).train()
+    print("[train] GRPO done.", flush=True)
+
+    # Phase 3 - post-training eval
+    print("\n[train] === PHASE 3: Post-training eval ===", flush=True)
+    set_inference()
+    final_step = metrics._step
+    for task in TASKS:
+        r = run_episode(
+            model_fn,
+            task,
+            judge_buffer=judge_buffer,
+            learned_judge=learned_judge,
+            judge_enabled=USE_LEARNED_JUDGE,
+        )
+        metrics.post_train_rewards[task] = r["total_reward"]
+        metrics.record_eval(
+            final_step,
+            task,
+            r["total_reward"],
+            r["difficulty"],
+            phase="post",
+            components=r.get("reward_components"),
+        )
+
+    print("\n[train] === IMPROVEMENT SUMMARY ===")
+    for task in TASKS:
+        b = metrics.pre_train_rewards.get(task, 0)
+        a = metrics.post_train_rewards.get(task, 0)
+        print(f"  {task:8s}: {b:.3f} -> {a:.3f}  ({a-b:+.3f})")
+
+    if judge_buffer is not None and judge_buffer.size() > 0:
+        judge_buffer.flush_jsonl(JUDGE_LOG_PATH)
+        print(f"[judge] Saved examples -> {JUDGE_LOG_PATH}", flush=True)
+
+    metrics.save("training_metrics.json")
+    model.save_pretrained("./trained_adapter")
+    tokenizer.save_pretrained("./trained_adapter")
+    if PUSH_TO_HUB and HF_TOKEN:
+        model.push_to_hub(HUB_REPO, token=HF_TOKEN)
+    print("\n[train] Done. Run: python train.py plot")
+
 
 def plot_reward_curve(path: str = "training_metrics.json", include_curriculum: bool = False):
     """
