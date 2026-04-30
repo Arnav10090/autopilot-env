@@ -615,5 +615,3 @@ Built for the **Meta × Scaler OpenEnv Hackathon Grand Finale, April 2026**. Tra
 Round 1 submission: [Customer Support Triage](https://huggingface.co/spaces/Arnav100904/customer-support-triage) — single-agent triage environment, 96.2% baseline score.
 
 ---
-
-*All code is MIT licensed. Contributions welcome.*
