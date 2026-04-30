@@ -444,10 +444,6 @@ We demonstrate five things that are hard to find combined in a single open-sourc
 4. **Controlled ablation**: improvement is measured under identical policy conditions, not against a different (weaker) model.
 5. **Live diagnostics**: every reward component is visible in real time via `/diagnostics`, making reward hacking detectable before it compounds.
 
-### For the Open-Source RL Community
-
-Every piece of this is MIT-licensed and reproducible on a free Colab T4 GPU. The training notebook runs to completion in ~2 hours. The environment runs locally with:
-
 ```bash
 docker build -t autopilot-env .
 python -m uvicorn server.app:app --host 0.0.0.0 --port 7860

@@ -23,7 +23,6 @@ pinned: false
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Unsloth](https://img.shields.io/badge/Training-Unsloth_%2B_GRPO-FF6B35?style=for-the-badge)](https://github.com/unslothai/unsloth)
-[![License](https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge)](LICENSE)
 
 <br/>
 
@@ -903,6 +902,5 @@ This grand finale submission builds on that foundation with dependency-constrain
 *Arnav Deepak Tiwari & Vishal Kumar · Team AI Apex*
 
 [![HF Space](https://img.shields.io/badge/🤗_Live_Demo-HuggingFace-FFD21E?style=for-the-badge)](https://huggingface.co/spaces/Arnav100904/adaptive-enterprise-autopilot)
-[![MIT License](https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge)](LICENSE)
 
 </div>
