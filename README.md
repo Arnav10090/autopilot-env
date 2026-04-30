@@ -626,7 +626,14 @@ Phase 3: Post-training evaluation
 
 ```bash
 # Colab (free T4 GPU, ~2 hours for 200 episodes)
-pip install unsloth trl transformers accelerate peft datasets mergekit
+pip install --force-reinstall --no-cache-dir \
+  "huggingface-hub>=0.34,<1.0" \
+  "transformers>=4.56,<5" \
+  "trl>=0.24,<1" \
+  "accelerate>=1.10,<2" \
+  "peft>=0.17,<1" \
+  "datasets>=4,<5" \
+  mergekit unsloth
 
 BASE_MODEL=unsloth/Qwen2.5-7B-Instruct \
 NUM_EPISODES=200 \

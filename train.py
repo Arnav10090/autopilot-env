@@ -30,11 +30,11 @@ v2 fixes (still present):
   - Plot labels axes correctly and shows before/after line
 
 Run on Colab (free T4 / A10G):
-    pip install unsloth trl transformers accelerate peft datasets mergekit
+    pip install --force-reinstall --no-cache-dir "huggingface-hub>=0.34,<1.0" "transformers>=4.56,<5" "trl>=0.24,<1" "accelerate>=1.10,<2" "peft>=0.17,<1" "datasets>=4,<5" mergekit unsloth
     python train.py
 
 Run on CPU (slower, uses CPU_BASE_MODEL by default):
-    pip install trl transformers accelerate peft datasets torch mergekit
+    pip install --force-reinstall --no-cache-dir "huggingface-hub>=0.34,<1.0" "transformers>=4.56,<5" "trl>=0.24,<1" "accelerate>=1.10,<2" "peft>=0.17,<1" "datasets>=4,<5" torch mergekit
     FORCE_CPU=1 NUM_EPISODES=20 python train.py
 """
 
@@ -1190,13 +1190,21 @@ def _print_trl_dependency_error(exc: BaseException) -> None:
             "Install it, restart the notebook runtime, then rerun training:\n"
             "    pip install -U mergekit\n\n"
             "Or install all training dependencies together:\n"
-            "    pip install -U trl transformers accelerate peft datasets torch mergekit",
+            "    pip install --force-reinstall --no-cache-dir \"huggingface-hub>=0.34,<1.0\" \"transformers>=4.56,<5\" \"trl>=0.24,<1\" \"accelerate>=1.10,<2\" \"peft>=0.17,<1\" \"datasets>=4,<5\" mergekit",
+            flush=True,
+        )
+    elif "TrainingArguments" in message or "grpo_config" in message:
+        print(
+            "[ERROR] TRL/Transformers version mismatch.\n"
+            "This training script expects the TRL 0.x trainer API and Transformers 4.x.\n"
+            "Run this in a fresh notebook/kernel, then rerun training:\n"
+            "    pip install --force-reinstall --no-cache-dir \"huggingface-hub>=0.34,<1.0\" \"transformers>=4.56,<5\" \"trl>=0.24,<1\" \"accelerate>=1.10,<2\" \"peft>=0.17,<1\" \"datasets>=4,<5\" mergekit unsloth",
             flush=True,
         )
     else:
         print(
             f"[ERROR] Failed to import TRL training components: {exc}\n"
-            "Run: pip install -U trl transformers accelerate peft datasets torch mergekit",
+            "Run: pip install --force-reinstall --no-cache-dir \"huggingface-hub>=0.34,<1.0\" \"transformers>=4.56,<5\" \"trl>=0.24,<1\" \"accelerate>=1.10,<2\" \"peft>=0.17,<1\" \"datasets>=4,<5\" mergekit unsloth",
             flush=True,
         )
 
