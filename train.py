@@ -30,11 +30,13 @@ v2 fixes (still present):
   - Plot labels axes correctly and shows before/after line
 
 Run on Colab (free T4 / A10G):
-    pip install --upgrade --prefer-binary "huggingface-hub>=0.34,<1.0" "transformers>=4.56,<5" "trl>=0.24,<1" "accelerate>=1.10,<2" "peft>=0.17,<1" "datasets>=4,<5" mergekit unsloth
+    pip uninstall -y torchvision
+    pip install --upgrade --prefer-binary --no-deps "huggingface-hub==0.36.0" "transformers==4.56.2" "trl==0.24.0" "accelerate==1.10.1" "peft==0.17.1" "datasets==4.3.0" "mergekit==0.1.4"
     python train.py
 
 Run on CPU (slower, uses CPU_BASE_MODEL by default):
-    pip install --upgrade --prefer-binary "huggingface-hub>=0.34,<1.0" "transformers>=4.56,<5" "trl>=0.24,<1" "accelerate>=1.10,<2" "peft>=0.17,<1" "datasets>=4,<5" torch mergekit
+    pip uninstall -y torchvision
+    pip install --upgrade --prefer-binary --no-deps "huggingface-hub==0.36.0" "transformers==4.56.2" "trl==0.24.0" "accelerate==1.10.1" "peft==0.17.1" "datasets==4.3.0" "mergekit==0.1.4"
     FORCE_CPU=1 NUM_EPISODES=20 python train.py
 """
 
@@ -1188,9 +1190,9 @@ def _print_trl_dependency_error(exc: BaseException) -> None:
         print(
             "[ERROR] Your installed trl expects the optional package 'mergekit'.\n"
             "Install it, restart the notebook runtime, then rerun training:\n"
-            "    pip install -U mergekit\n\n"
+            "    pip install --no-deps mergekit==0.1.4\n\n"
             "Or install all training dependencies together:\n"
-            "    pip install --upgrade --prefer-binary \"huggingface-hub>=0.34,<1.0\" \"transformers>=4.56,<5\" \"trl>=0.24,<1\" \"accelerate>=1.10,<2\" \"peft>=0.17,<1\" \"datasets>=4,<5\" mergekit",
+            "    pip uninstall -y torchvision && pip install --upgrade --prefer-binary --no-deps \"huggingface-hub==0.36.0\" \"transformers==4.56.2\" \"trl==0.24.0\" \"accelerate==1.10.1\" \"peft==0.17.1\" \"datasets==4.3.0\" \"mergekit==0.1.4\"",
             flush=True,
         )
     elif "TrainingArguments" in message or "grpo_config" in message:
@@ -1198,13 +1200,13 @@ def _print_trl_dependency_error(exc: BaseException) -> None:
             "[ERROR] TRL/Transformers version mismatch.\n"
             "This training script expects the TRL 0.x trainer API and Transformers 4.x.\n"
             "Run this in a fresh notebook/kernel, then rerun training:\n"
-            "    pip install --upgrade --prefer-binary \"huggingface-hub>=0.34,<1.0\" \"transformers>=4.56,<5\" \"trl>=0.24,<1\" \"accelerate>=1.10,<2\" \"peft>=0.17,<1\" \"datasets>=4,<5\" mergekit unsloth",
+            "    pip uninstall -y torchvision && pip install --upgrade --prefer-binary --no-deps \"huggingface-hub==0.36.0\" \"transformers==4.56.2\" \"trl==0.24.0\" \"accelerate==1.10.1\" \"peft==0.17.1\" \"datasets==4.3.0\" \"mergekit==0.1.4\"",
             flush=True,
         )
     else:
         print(
             f"[ERROR] Failed to import TRL training components: {exc}\n"
-            "Run: pip install --upgrade --prefer-binary \"huggingface-hub>=0.34,<1.0\" \"transformers>=4.56,<5\" \"trl>=0.24,<1\" \"accelerate>=1.10,<2\" \"peft>=0.17,<1\" \"datasets>=4,<5\" mergekit unsloth",
+            "Run: pip uninstall -y torchvision && pip install --upgrade --prefer-binary --no-deps \"huggingface-hub==0.36.0\" \"transformers==4.56.2\" \"trl==0.24.0\" \"accelerate==1.10.1\" \"peft==0.17.1\" \"datasets==4.3.0\" \"mergekit==0.1.4\"",
             flush=True,
         )
 
@@ -1239,6 +1241,9 @@ def main():
                 "falling back to Transformers + PEFT.",
                 flush=True,
             )
+            if resolved_model.startswith("unsloth/"):
+                resolved_model = os.getenv("TRANSFORMERS_BASE_MODEL", CPU_BASE_MODEL)
+                print(f"[train] Transformers fallback model={resolved_model}", flush=True)
 
     print("[train] Loading model...", flush=True)
     if use_unsloth_backend:

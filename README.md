@@ -626,14 +626,15 @@ Phase 3: Post-training evaluation
 
 ```bash
 # Colab (free T4 GPU, ~2 hours for 200 episodes)
-pip install --upgrade --prefer-binary \
-  "huggingface-hub>=0.34,<1.0" \
-  "transformers>=4.56,<5" \
-  "trl>=0.24,<1" \
-  "accelerate>=1.10,<2" \
-  "peft>=0.17,<1" \
-  "datasets>=4,<5" \
-  mergekit unsloth
+pip uninstall -y torchvision
+pip install --upgrade --prefer-binary --no-deps \
+  "huggingface-hub==0.36.0" \
+  "transformers==4.56.2" \
+  "trl==0.24.0" \
+  "accelerate==1.10.1" \
+  "peft==0.17.1" \
+  "datasets==4.3.0" \
+  "mergekit==0.1.4"
 
 BASE_MODEL=unsloth/Qwen2.5-7B-Instruct \
 NUM_EPISODES=200 \
