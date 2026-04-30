@@ -626,7 +626,7 @@ Phase 3: Post-training evaluation
 
 ```bash
 # Colab (free T4 GPU, ~2 hours for 200 episodes)
-pip install unsloth trl transformers accelerate peft datasets
+pip install unsloth trl transformers accelerate peft datasets mergekit
 
 BASE_MODEL=unsloth/Qwen2.5-7B-Instruct \
 NUM_EPISODES=200 \

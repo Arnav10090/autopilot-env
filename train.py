@@ -30,11 +30,11 @@ v2 fixes (still present):
   - Plot labels axes correctly and shows before/after line
 
 Run on Colab (free T4 / A10G):
-    pip install unsloth trl transformers accelerate peft datasets
+    pip install unsloth trl transformers accelerate peft datasets mergekit
     python train.py
 
 Run on CPU (slower, uses CPU_BASE_MODEL by default):
-    pip install trl transformers accelerate peft datasets torch
+    pip install trl transformers accelerate peft datasets torch mergekit
     FORCE_CPU=1 NUM_EPISODES=20 python train.py
 """
 
@@ -1182,13 +1182,32 @@ def _trainer_kwargs(trainer_cls, tokenizer, kwargs: Dict[str, Any]) -> Dict[str,
     return trainer_kwargs
 
 
+def _print_trl_dependency_error(exc: BaseException) -> None:
+    message = str(exc)
+    if "mergekit" in message:
+        print(
+            "[ERROR] Your installed trl expects the optional package 'mergekit'.\n"
+            "Install it, restart the notebook runtime, then rerun training:\n"
+            "    pip install -U mergekit\n\n"
+            "Or install all training dependencies together:\n"
+            "    pip install -U trl transformers accelerate peft datasets torch mergekit",
+            flush=True,
+        )
+    else:
+        print(
+            f"[ERROR] Failed to import TRL training components: {exc}\n"
+            "Run: pip install -U trl transformers accelerate peft datasets torch mergekit",
+            flush=True,
+        )
+
+
 def main():
     try:
         import torch
         from datasets import Dataset
         from trl import GRPOConfig, GRPOTrainer, SFTConfig, SFTTrainer
-    except ImportError as e:
-        print(f"[ERROR] {e}\nRun: pip install trl transformers accelerate peft datasets torch")
+    except (ImportError, ModuleNotFoundError, RuntimeError) as e:
+        _print_trl_dependency_error(e)
         sys.exit(1)
 
     cuda = bool(torch.cuda.is_available()) and not FORCE_CPU
